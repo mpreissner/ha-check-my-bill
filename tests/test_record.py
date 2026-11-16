@@ -5,7 +5,14 @@ import pytest
 from core.compute import Coverage, CycleTotals
 from core.cycles import Cycle
 from core.reconcile import Status
-from core.record import CycleRecord, Source, build_record, closed_by_rollover, reprice
+from core.record import (
+    BilledAmounts,
+    CycleRecord,
+    Source,
+    build_record,
+    closed_by_rollover,
+    reprice,
+)
 from core.tariff import RateSpec, Tariff, TariffVersion
 
 CYCLE = Cycle(date(2026, 10, 3), date(2026, 11, 2))  # 30 days
@@ -154,3 +161,27 @@ def test_reprice_follows_tariff_and_tolerance() -> None:
     assert record.status is Status.OK
     assert reprice(record, tariff=TARIFF, tolerance=0.001).status is not Status.OK
     assert reprice(record, tariff=None).cost is None
+
+
+def test_bill_round_trips_and_survives_reprice() -> None:
+    record = build_record(
+        CYCLE,
+        totals(),
+        source=Source.UTILITY,
+        final=True,
+        closed=True,
+        tariff=TARIFF,
+        bill=BilledAmounts(kwh=301.0, cost=55.5),
+    )
+    data = json.loads(json.dumps(record.to_dict()))
+    assert data["bill"] == {"kwh": 301.0, "cost": 55.5}
+    assert CycleRecord.from_dict(data) == record
+    assert reprice(record, tariff=None).bill == record.bill
+
+    without = build_record(
+        CYCLE, totals(), source=Source.USER, final=True, closed=True, tariff=None
+    )
+    assert without.to_dict()["bill"] is None
+    legacy = without.to_dict()
+    del legacy["bill"]
+    assert CycleRecord.from_dict(legacy) == without
