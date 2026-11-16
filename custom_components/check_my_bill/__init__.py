@@ -8,13 +8,24 @@ from __future__ import annotations
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.typing import ConfigType
 
+from . import issues
 from .const import DOMAIN
 from .coordinator import CheckMyBillConfigEntry, CheckMyBillCoordinator
+from .services import async_setup_services
 from .store import CycleStore
+from .websocket import async_setup_websocket
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [Platform.SENSOR]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the actions and WebSocket commands, which exist while no entry is loaded."""
+    async_setup_services(hass)
+    async_setup_websocket(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: CheckMyBillConfigEntry) -> bool:
@@ -29,12 +40,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: CheckMyBillConfigEntry) 
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: CheckMyBillConfigEntry) -> bool:
-    """Remove the sensors."""
+    """Remove the sensors and the entry's repair issues."""
+    issues.async_clear(hass, entry.entry_id)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: CheckMyBillConfigEntry) -> None:
-    """Delete the stored history with the entry."""
+    """Delete the stored history and the repair issues with the entry."""
+    issues.async_clear(hass, entry.entry_id)
     await CycleStore(hass, entry.entry_id).async_remove()
 
 

@@ -10,7 +10,8 @@
   "config_flow": true,
   "dependencies": [
     "energy",
-    "recorder"
+    "recorder",
+    "websocket_api"
   ],
   "documentation": "https://github.com/mpreissner/ha-check-my-bill",
   "integration_type": "service",

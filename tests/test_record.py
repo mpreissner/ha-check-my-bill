@@ -5,7 +5,7 @@ import pytest
 from core.compute import Coverage, CycleTotals
 from core.cycles import Cycle
 from core.reconcile import Status
-from core.record import CycleRecord, Source, build_record, closed_by_rollover
+from core.record import CycleRecord, Source, build_record, closed_by_rollover, reprice
 from core.tariff import RateSpec, Tariff, TariffVersion
 
 CYCLE = Cycle(date(2026, 10, 3), date(2026, 11, 2))  # 30 days
@@ -122,3 +122,35 @@ def test_no_rollover() -> None:
     current = Cycle(date(2026, 11, 2), date(2026, 12, 2))
     assert closed_by_rollover(None, current) is None
     assert closed_by_rollover(current, current) is None
+
+
+def test_user_dates_are_not_estimated() -> None:
+    record = build_record(CYCLE, totals(), source=Source.USER, final=True, closed=True, tariff=None)
+    assert not record.estimated
+
+
+def test_totals_round_trip() -> None:
+    record = build_record(
+        CYCLE, totals(), source=Source.BACKFILL, final=True, closed=True, tariff=TARIFF
+    )
+    assert record.totals == totals()
+
+
+def test_reprice_follows_tariff_and_tolerance() -> None:
+    record = build_record(
+        CYCLE, totals(), source=Source.BACKFILL, final=True, closed=True, tariff=TARIFF
+    )
+    assert record.cost is not None
+    dearer = Tariff(
+        (TariffVersion(date(2020, 1, 1), RateSpec(0.20), RateSpec(0.05), fixed_monthly=9.0),)
+    )
+    repriced = reprice(record, tariff=dearer)
+    assert repriced.cost is not None
+    assert repriced.cost.supply == pytest.approx(record.cost.supply * 2)
+    assert (repriced.source, repriced.final) == (Source.BACKFILL, True)
+    assert reprice(record, tariff=TARIFF) == record
+
+    # 300 utility kWh against a 303.5-305 band: outside 0.1%, inside 2%.
+    assert record.status is Status.OK
+    assert reprice(record, tariff=TARIFF, tolerance=0.001).status is not Status.OK
+    assert reprice(record, tariff=None).cost is None

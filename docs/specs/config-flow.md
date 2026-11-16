@@ -127,9 +127,8 @@ A menu with three steps:
   - `export_mode`, which is also a field of the config flow's `tariff` step
   - `export_rate` lives on the version.
 
-Option changes reload the entry through the existing update listener. Stored records are
-not recomputed: final records keep the cost they were computed with. Recomputing history
-on tariff edits is phase 4 (§3.6 edit service).
+Option changes reload the entry through the existing update listener. On that load the
+stored records are repriced with the new settings (`services-api.md` §2).
 
 ## 5. Tests (`tests_ha/test_config_flow.py`)
 
