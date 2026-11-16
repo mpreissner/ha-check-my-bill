@@ -48,25 +48,36 @@ collection_key: energy_my_dashboard   # optional, follow_energy only
 
 ### Current cycle
 
-- Dates (`start` – `last_day`, "est." when `estimated`), "day N of M".
-- HA kWh (`metered_kwh`), utility kWh (`utility_kwh`) with its coverage %. Below 100%
-  utility coverage, a note: "utility data lags 1–2 days".
-- Expected cost to date (`expected_cost.total`) and projected (`projected_cost.total`),
-  both hidden when `has_tariff` is false.
-- Status pill.
+- Label, dates (`start` – `last_day`, an "est." tag when `estimated`) and the status pill.
+- While `in_progress`: a progress bar, "Day N of M" and the days left.
+- With a tariff: the projected bill (`projected_cost.total`) as the main figure and the
+  expected cost so far (`expected_cost.total`) beside it. Both are hidden when
+  `has_tariff` is false.
+- Two bars compare HA kWh (`metered_kwh`) with utility kWh (`utility_kwh`), scaled to the
+  larger. Below 100% utility coverage the utility bar shows the coverage %, and an open
+  cycle adds the note "utility data lags 1–2 days".
 
 ### Previous cycles
 
-A table, newest first, `cycles` rows: dates (with "est."), HA kWh, utility kWh, expected
-$ (column hidden without a tariff) and status. Clicking a row (or Enter on it) expands:
+A list, newest first, `cycles` rows. Each row has a status dot, the dates (with "est."),
+a line with the status label and both kWh totals, and, with a tariff, the expected cost
+with the utility's billed cost (`bill.cost`) under it when known. A chevron shows the
+row's state. Clicking a row (or Enter/Space on it) expands it:
 
 - cost breakdown: supply, delivery, riders, fixed, tax, export credit (when nonzero),
-  total;
-- reconciliation: expected utility band `low`–`high` kWh at the configured tolerance and
-  the deviation % when outside it;
+  total, and "Utility billed" when `bill.cost` is known;
+- the HA/utility kWh bars;
+- reconciliation: a scale with the expected utility band `low`–`high` kWh shaded and a
+  marker, in the status colour, at the utility's reading; the caption gives the band, the
+  tolerance and the deviation % when outside it;
 - export kWh (HA and utility) when the export mode is not `none`.
 
+On cards at least 480px wide, the breakdown and the reconciliation sit side by side
+(container query).
+
 ### Status pill
+
+The pill is a tinted badge with a dot; the row dot uses the same colour.
 
 | status | label | colour |
 |---|---|---|
