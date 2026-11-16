@@ -1,0 +1,39 @@
+{
+  "entity": {
+    "sensor": {
+      "cycle_import": {
+        "name": "Cycle grid import"
+      },
+      "cycle_expected_cost": {
+        "name": "Cycle expected cost"
+      },
+      "cycle_projected_cost": {
+        "name": "Cycle projected cost"
+      },
+      "cycle_status": {
+        "name": "Cycle status",
+        "state": {
+          "ok": "OK",
+          "warn": "Warning",
+          "mismatch": "Mismatch",
+          "no_data": "No data",
+          "in_progress": "In progress"
+        }
+      },
+      "cycle_start": {
+        "name": "Cycle start"
+      },
+      "cycle_end": {
+        "name": "Cycle end"
+      },
+      "last_cycle_expected_cost": {
+        "name": "Last cycle expected cost"
+      }
+    }
+  },
+  "exceptions": {
+    "no_cycle": {
+      "message": "The current billing cycle is unknown: the utility's billing-date sensors are unavailable and no meter-read day is configured."
+    }
+  }
+}

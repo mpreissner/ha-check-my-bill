@@ -228,9 +228,11 @@ Values per cycle:
 - `netted_kwh`: Σ max(0, import_h − export_h). This is the lower bound for meters that net
   sub-hourly.
 - `utility_kwh`: Σ utility import (null if there is no utility stat).
-- `coverage`: the fraction of hours in the cycle that have data for each statistic. When
-  the utility statistic covers less than 100% of the hours (because of the lag), the cycle
-  is "in progress" and the utility figure is partial.
+- `coverage`: the fraction of hours in the cycle spanned by each statistic's rows, from
+  its first row in the cycle to its last. A gap between two rows is not missing data: the
+  recorder's sums are cumulative, so the row after a gap carries the missed hours' energy.
+  When the utility statistic covers less than 100% of the hours (because of the lag), the
+  cycle is "in progress" and the utility figure is partial.
 - `expected_cost`: the tariff applied to the **cost basis kWh**:
   1. `utility_kwh` when its coverage is 100%;
   2. otherwise `metered_kwh` (labelled "estimate from HA meter").

@@ -41,6 +41,15 @@ def test_missing_slots_lower_coverage_and_outside_slots_ignored() -> None:
     assert totals.coverage.imports == 1.0
 
 
+def test_interior_gap_keeps_full_coverage() -> None:
+    # The recorder folds a missed hour's energy into the next row's change.
+    imports = {h(0): 1.0, h(2): 2.0, h(3): 1.0}
+    totals = compute_totals(SLOTS, imports, utility={h(1): 1.0, h(2): 1.0})
+    assert totals.metered_kwh == 4.0
+    assert totals.coverage.imports == 1.0
+    assert totals.coverage.utility == 0.5  # leading and trailing gaps are missing data
+
+
 def test_daily_data_has_no_netted_value() -> None:
     days = [T0, T0 + timedelta(days=1)]
     totals = compute_totals(days, {T0: 10.0, days[1]: 12.0}, {T0: 1.0}, hourly=False)
