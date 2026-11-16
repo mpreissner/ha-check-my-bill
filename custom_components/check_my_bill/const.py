@@ -24,4 +24,6 @@ DEFAULT_TOLERANCE_PCT = 2.0
 
 UPDATE_INTERVAL = timedelta(hours=1)
 BACKFILL_MAX_CYCLES = 12
+BILL_FETCH_INTERVAL = timedelta(days=1)
+"""How often past bill periods are read from Opower (docs/specs/opower-bills.md §5)."""
 STORE_VERSION = 1

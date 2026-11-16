@@ -18,6 +18,7 @@ from homeassistant.util import dt as dt_util
 from . import issues
 from .const import (
     BACKFILL_MAX_CYCLES,
+    BILL_FETCH_INTERVAL,
     CONF_CYCLE_DAY,
     CONF_CYCLE_END_ENTITY,
     CONF_CYCLE_START_ENTITY,
@@ -32,11 +33,20 @@ from .const import (
     DOMAIN,
     UPDATE_INTERVAL,
 )
+from .core.bills import merge_bills
 from .core.compute import project
 from .core.cycles import Cycle, add_months, backfill, from_cycle_day, from_utility_dates, is_final
-from .core.record import CycleRecord, Source, build_record, closed_by_rollover, reprice
+from .core.record import (
+    BilledAmounts,
+    CycleRecord,
+    Source,
+    build_record,
+    closed_by_rollover,
+    reprice,
+)
 from .core.serde import tariff_from_options
 from .core.tariff import CostBreakdown, ExportMode, cost
+from .opower_bills import BillFetchError, async_fetch_bills
 from .stats import StatIds, cycle_totals, earliest_data
 from .store import CycleStore, StoredState
 
@@ -98,6 +108,8 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         self._state: StoredState | None = None
         self._lock = asyncio.Lock()
         """Serialises the refresh and the actions that edit the history."""
+        self._bills_fetched: datetime | None = None
+        self._bill_error_logged = False
 
     @callback
     def async_track_cycle_entities(self) -> None:
@@ -133,7 +145,9 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
             return from_cycle_day(today, int(cycle_day)), Source.MANUAL
         return None
 
-    async def _closed_record(self, cycle: Cycle, source: Source, today: date) -> CycleRecord:
+    async def _closed_record(
+        self, cycle: Cycle, source: Source, today: date, bill: BilledAmounts | None = None
+    ) -> CycleRecord:
         tz = dt_util.get_default_time_zone()
         totals = await cycle_totals(self.hass, self.ids, cycle, tz)
         return build_record(
@@ -145,6 +159,7 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
             tariff=self.tariff,
             export_mode=self.export_mode,
             tolerance=self.tolerance,
+            bill=bill,
         )
 
     async def _backfill(self, state: StoredState, current: Cycle, now: datetime) -> None:
@@ -156,6 +171,41 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         for cycle in backfill(current, BACKFILL_MAX_CYCLES, first_day):
             state.cycles.append(await self._closed_record(cycle, Source.BACKFILL, now.date()))
         _LOGGER.debug("Backfilled %d cycles from %s", len(state.cycles), first_day)
+
+    async def _merge_bills(self, state: StoredState, current: Cycle, now: datetime) -> None:
+        """Replace estimated history with Opower's bill periods, at most once a day."""
+        if self._bills_fetched is not None and now - self._bills_fetched < BILL_FETCH_INTERVAL:
+            return
+        tz = dt_util.get_default_time_zone()
+        since = datetime.combine(
+            add_months(current.start, -(BACKFILL_MAX_CYCLES + 1)), time.min, tzinfo=tz
+        )
+        try:
+            bills = await async_fetch_bills(self.hass, self.ids.utility, since)
+        except BillFetchError as err:
+            if not self._bill_error_logged:
+                _LOGGER.warning("Could not read past bills from Opower, keeping estimates: %s", err)
+                self._bill_error_logged = True
+            return
+        if bills is None:
+            return
+        self._bills_fetched, self._bill_error_logged = now, False
+
+        first_day = await earliest_data(self.hass, self.ids, since, now, tz)
+        if first_day is None:
+            return
+        result = merge_bills(
+            state.cycles,
+            [b for b in bills if b.end > first_day],
+            current.start,
+            BACKFILL_MAX_CYCLES,
+        )
+        added = [
+            await self._closed_record(b.cycle, Source.UTILITY, now.date(), bill=b.amounts)
+            for b in result.compute
+        ]
+        state.cycles = sorted([*result.keep, *added], key=lambda r: r.start, reverse=True)
+        _LOGGER.debug("Merged %d bills from Opower, %d computed", len(bills), len(added))
 
     async def _async_update_data(self) -> BillData:
         async with self._lock:
@@ -197,10 +247,14 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
             state.cycles.insert(0, record)
             _LOGGER.debug("Cycle %s closed: %s", closed, record.status)
 
+        await self._merge_bills(state, current, now)
+
         # Opower data lags; closed cycles are recomputed until they are final.
         for index, record in enumerate(state.cycles):
             if not record.final:
-                state.cycles[index] = await self._closed_record(record.cycle, record.source, today)
+                state.cycles[index] = await self._closed_record(
+                    record.cycle, record.source, today, record.bill
+                )
 
         state.current, state.current_source = current, source
         current_record, projected = await self._current_record(current, source, now)
@@ -302,7 +356,9 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
             today = dt_util.now().date()
             for index in indexes:
                 record = state.cycles[index]
-                state.cycles[index] = await self._closed_record(record.cycle, record.source, today)
+                state.cycles[index] = await self._closed_record(
+                    record.cycle, record.source, today, record.bill
+                )
             await self.store.async_save(state)
         await self.async_refresh()
 

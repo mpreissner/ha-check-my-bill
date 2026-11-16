@@ -30,6 +30,15 @@ class Source(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class BilledAmounts:
+    """What the utility billed for a cycle, as Opower reports it."""
+
+    kwh: float | None
+    cost: float | None
+    """Opower's provided cost; depending on the utility it may leave out taxes and fees."""
+
+
+@dataclass(frozen=True, slots=True)
 class CycleRecord:
     """The result for one cycle. ``end`` is exclusive."""
 
@@ -52,6 +61,8 @@ class CycleRecord:
     """Expected charges; None without a tariff. To date for the open cycle."""
     cost_basis: str | None
     """``"utility"`` or ``"meter"``: which kWh the cost was computed from."""
+    bill: BilledAmounts | None = None
+    """The utility's bill for this period, when Opower reported one."""
 
     @property
     def cycle(self) -> Cycle:
@@ -99,6 +110,7 @@ class CycleRecord:
             "calibration_ratio": self.calibration_ratio,
             "expected_cost": None if self.cost is None else cost_to_dict(self.cost),
             "cost_basis": self.cost_basis,
+            "bill": None if self.bill is None else {"kwh": self.bill.kwh, "cost": self.bill.cost},
         }
 
     @classmethod
@@ -107,6 +119,7 @@ class CycleRecord:
         cov = data["coverage"]
         band = data.get("band")
         expected = data.get("expected_cost")
+        billed = data.get("bill")
         return cls(
             start=date.fromisoformat(data["start"]),
             end=date.fromisoformat(data["end"]),
@@ -129,6 +142,7 @@ class CycleRecord:
             calibration_ratio=data.get("calibration_ratio"),
             cost=None if expected is None else _cost_from_dict(expected),
             cost_basis=data.get("cost_basis"),
+            bill=None if billed is None else BilledAmounts(billed.get("kwh"), billed.get("cost")),
         )
 
 
@@ -173,6 +187,7 @@ def build_record(
     export_mode: ExportMode = ExportMode.NONE,
     tolerance: float = DEFAULT_TOLERANCE,
     cost_until: date | None = None,
+    bill: BilledAmounts | None = None,
 ) -> CycleRecord:
     """Reconcile and price one cycle.
 
@@ -215,6 +230,7 @@ def build_record(
         calibration_ratio=calibration_ratio(totals),
         cost=expected,
         cost_basis=basis_source,
+        bill=bill,
     )
 
 
@@ -238,6 +254,7 @@ def reprice(
         tariff=tariff,
         export_mode=export_mode,
         tolerance=tolerance,
+        bill=record.bill,
     )
 
 
