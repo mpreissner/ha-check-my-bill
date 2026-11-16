@@ -3,6 +3,10 @@
 The HA layer reads ``change`` values from the recorder, keyed by the slot's start time
 (hourly where available, daily otherwise), and passes them here with the list of slots
 the period should contain. Missing slots lower coverage; they are not treated as zero.
+
+Recorder statistics are cumulative: when HA misses an hour (a restart), the next row's
+``change`` carries that hour's energy. So only slots before the first row or after the last
+row in the period count as missing; a gap between two rows does not.
 """
 
 from collections.abc import Mapping, Sequence
@@ -27,7 +31,7 @@ def hour_starts(start: datetime, end: datetime) -> list[datetime]:
 
 @dataclass(frozen=True, slots=True)
 class Coverage:
-    """Fraction of expected slots present for each input; None when not configured."""
+    """Fraction of expected slots spanned by each input's rows; None when not configured."""
 
     imports: float
     exports: float | None = None
@@ -51,9 +55,12 @@ class CycleTotals:
     coverage: Coverage
 
 
-def _sum(series: Series, slots: frozenset[datetime]) -> tuple[float, int]:
-    values = [v for k, v in series.items() if k in slots]
-    return sum(values), len(values)
+def _sum(series: Series, slots: Sequence[datetime]) -> tuple[float, int]:
+    """The total over ``slots`` and how many slots the rows span, first to last."""
+    present = [i for i, slot in enumerate(slots) if slot in series]
+    if not present:
+        return 0.0, 0
+    return sum(series[slots[i]] for i in present), present[-1] - present[0] + 1
 
 
 def compute_totals(
@@ -66,18 +73,19 @@ def compute_totals(
     hourly: bool = True,
 ) -> CycleTotals:
     """Totals over ``slots``. Series entries outside ``slots`` are ignored."""
+    slots = sorted(set(slots))
     wanted = frozenset(slots)
-    expected = len(wanted)
+    expected = len(slots)
 
     def ratio(count: int) -> float:
         return count / expected if expected else 0.0
 
-    metered, n_import = _sum(imports, wanted)
+    metered, n_import = _sum(imports, slots)
 
     export_kwh: float | None = None
     export_cov: float | None = None
     if exports is not None:
-        export_kwh, n_export = _sum(exports, wanted)
+        export_kwh, n_export = _sum(exports, slots)
         export_cov = ratio(n_export)
 
     netted: float | None = None
@@ -92,13 +100,13 @@ def compute_totals(
     utility_kwh: float | None = None
     utility_cov: float | None = None
     if utility is not None:
-        utility_kwh, n_utility = _sum(utility, wanted)
+        utility_kwh, n_utility = _sum(utility, slots)
         utility_cov = ratio(n_utility)
 
     utility_export_kwh: float | None = None
     utility_export_cov: float | None = None
     if utility_exports is not None:
-        utility_export_kwh, n_uexp = _sum(utility_exports, wanted)
+        utility_export_kwh, n_uexp = _sum(utility_exports, slots)
         utility_export_cov = ratio(n_uexp)
 
     return CycleTotals(
