@@ -1,0 +1,27 @@
+set_cycle_dates:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: check_my_bill
+    cycle_start:
+      required: true
+      selector:
+        date:
+    start:
+      required: true
+      selector:
+        date:
+    end:
+      required: true
+      selector:
+        date:
+recompute:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: check_my_bill
+    cycle_start:
+      selector:
+        date:

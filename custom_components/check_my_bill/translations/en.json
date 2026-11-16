@@ -180,6 +180,66 @@
   "exceptions": {
     "no_cycle": {
       "message": "The current billing cycle is unknown: the utility's billing-date sensors are unavailable and no meter-read day is configured."
+    },
+    "cycle_not_found": {
+      "message": "No closed billing cycle starts on {date}."
+    },
+    "cycle_not_editable": {
+      "message": "This cycle's dates came from the utility and can't be edited."
+    },
+    "invalid_dates": {
+      "message": "The end date must not be before the start date."
+    },
+    "cycle_overlap": {
+      "message": "The new dates overlap another cycle or the current one. Shorten the neighbouring cycle first."
+    }
+  },
+  "services": {
+    "set_cycle_dates": {
+      "name": "Set cycle dates",
+      "description": "Corrects an estimated past cycle with the dates printed on the bill, then recomputes it.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Entry",
+          "description": "The Check My Bill entry. Optional when there is only one."
+        },
+        "cycle_start": {
+          "name": "Cycle",
+          "description": "The start date the cycle has now."
+        },
+        "start": {
+          "name": "Start",
+          "description": "The first day of the billing period on the bill."
+        },
+        "end": {
+          "name": "End",
+          "description": "The last day of the billing period on the bill."
+        }
+      }
+    },
+    "recompute": {
+      "name": "Recompute",
+      "description": "Reads the statistics again for past cycles, for example after the utility imported late data.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Entry",
+          "description": "The Check My Bill entry. Optional when there is only one."
+        },
+        "cycle_start": {
+          "name": "Cycle",
+          "description": "The start date of one cycle to recompute. Leave empty for all."
+        }
+      }
+    }
+  },
+  "issues": {
+    "export_detected": {
+      "title": "Your utility is recording export",
+      "description": "{title} is set to export mode \"none\", but your utility is now recording energy sent to the grid. Check whether net metering started. If so, change the export mode under the integration's options (Settings). If the export is uncompensated, ignore this issue."
+    },
+    "missing_statistic": {
+      "title": "A statistic used by Check My Bill is missing",
+      "description": "{title} uses statistics that no longer exist: {statistics}. This can happen after the utility integration is re-authenticated. Choose the new statistics with **Reconfigure** on the integration's entry."
     }
   }
 }

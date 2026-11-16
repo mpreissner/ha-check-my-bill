@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
@@ -9,10 +10,12 @@ from datetime import UTC, date, datetime, time, timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from . import issues
 from .const import (
     BACKFILL_MAX_CYCLES,
     CONF_CYCLE_DAY,
@@ -31,7 +34,7 @@ from .const import (
 )
 from .core.compute import project
 from .core.cycles import Cycle, add_months, backfill, from_cycle_day, from_utility_dates, is_final
-from .core.record import CycleRecord, Source, build_record, closed_by_rollover
+from .core.record import CycleRecord, Source, build_record, closed_by_rollover, reprice
 from .core.serde import tariff_from_options
 from .core.tariff import CostBreakdown, ExportMode, cost
 from .stats import StatIds, cycle_totals, earliest_data
@@ -93,6 +96,8 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         self.tolerance = float(options.get(CONF_TOLERANCE, DEFAULT_TOLERANCE_PCT)) / 100
         self.store = CycleStore(hass, entry.entry_id)
         self._state: StoredState | None = None
+        self._lock = asyncio.Lock()
+        """Serialises the refresh and the actions that edit the history."""
 
     @callback
     def async_track_cycle_entities(self) -> None:
@@ -153,6 +158,13 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         _LOGGER.debug("Backfilled %d cycles from %s", len(state.cycles), first_day)
 
     async def _async_update_data(self) -> BillData:
+        async with self._lock:
+            data = await self._update()
+        recent = [data.current, *data.history[:1]]
+        await issues.async_check(self.hass, self.config_entry, self.ids, self.export_mode, recent)
+        return data
+
+    async def _update(self) -> BillData:
         now = dt_util.now()
         today = now.date()
         if self._state is None:
@@ -163,6 +175,8 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
                 _LOGGER.info("Statistics changed; discarding stored cycle history")
                 self._state = StoredState()
             self._state.sources = sources
+            # Settings may have changed since the records were built (spec services-api §2).
+            self._state.cycles = [self._reprice(r) for r in self._state.cycles]
         state = self._state
 
         found = self._configured_cycle(today)
@@ -231,3 +245,82 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
             period_days=current.days,
         )
         return record, projected
+
+    def _reprice(self, record: CycleRecord) -> CycleRecord:
+        return reprice(
+            record, tariff=self.tariff, export_mode=self.export_mode, tolerance=self.tolerance
+        )
+
+    def _loaded_state(self) -> StoredState:
+        if self._state is None:  # the entry sets up only after a first successful refresh
+            raise RuntimeError("history not loaded")
+        return self._state
+
+    @staticmethod
+    def _index(state: StoredState, cycle_start: date) -> int:
+        for index, record in enumerate(state.cycles):
+            if record.start == cycle_start:
+                return index
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="cycle_not_found",
+            translation_placeholders={"date": cycle_start.isoformat()},
+        )
+
+    async def async_set_cycle_dates(self, cycle_start: date, start: date, last_day: date) -> None:
+        """Move a closed cycle's estimated boundaries to the dates on the bill."""
+        if last_day < start:
+            raise ServiceValidationError(translation_domain=DOMAIN, translation_key="invalid_dates")
+        new = Cycle(start, last_day + timedelta(days=1))
+        async with self._lock:
+            state = self._loaded_state()
+            index = self._index(state, cycle_start)
+            if state.cycles[index].source is Source.UTILITY:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="cycle_not_editable"
+                )
+            others = (r for i, r in enumerate(state.cycles) if i != index)
+            overlaps = any(r.start < new.end and new.start < r.end for r in others)
+            if overlaps or (state.current is not None and new.end > state.current.start):
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="cycle_overlap"
+                )
+            today = dt_util.now().date()
+            state.cycles[index] = await self._closed_record(new, Source.USER, today)
+            state.cycles.sort(key=lambda r: r.start, reverse=True)
+            await self.store.async_save(state)
+        await self.async_refresh()
+
+    async def async_recompute(self, cycle_start: date | None = None) -> None:
+        """Read the statistics again for one closed cycle, or all of them."""
+        async with self._lock:
+            state = self._loaded_state()
+            if cycle_start is None:
+                indexes: list[int] = list(range(len(state.cycles)))
+            else:
+                indexes = [self._index(state, cycle_start)]
+            today = dt_util.now().date()
+            for index in indexes:
+                record = state.cycles[index]
+                state.cycles[index] = await self._closed_record(record.cycle, record.source, today)
+            await self.store.async_save(state)
+        await self.async_refresh()
+
+    async def async_range(self, cycle: Cycle) -> CycleRecord:
+        """Any date range computed like a cycle; in progress if it has not ended yet."""
+        tz = dt_util.get_default_time_zone()
+        now = dt_util.now()
+        closed = cycle.local_bounds(tz)[1] <= now
+        until = None if closed else now.replace(minute=0, second=0, microsecond=0)
+        totals = await cycle_totals(self.hass, self.ids, cycle, tz, until)
+        return build_record(
+            cycle,
+            totals,
+            source=Source.MANUAL,
+            final=closed,
+            closed=closed,
+            tariff=self.tariff,
+            export_mode=self.export_mode,
+            tolerance=self.tolerance,
+            cost_until=None if closed else now.date() + timedelta(days=1),
+        )

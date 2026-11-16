@@ -25,6 +25,8 @@ class Source(StrEnum):
     """The configured meter-read day. Utility read dates drift, so these are estimates."""
     BACKFILL = "backfill"
     """Stepped back from the current cycle by whole months. Estimated."""
+    USER = "user"
+    """Entered by the user from a bill (the ``set_cycle_dates`` action)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,8 +60,20 @@ class CycleRecord:
 
     @property
     def estimated(self) -> bool:
-        """Whether the boundaries are estimates rather than the utility's dates."""
-        return self.source is not Source.UTILITY
+        """Whether the boundaries are estimates rather than dates from the utility or a bill."""
+        return self.source in (Source.MANUAL, Source.BACKFILL)
+
+    @property
+    def totals(self) -> CycleTotals:
+        """The totals this record was built from."""
+        return CycleTotals(
+            metered_kwh=self.metered_kwh,
+            export_kwh=self.export_kwh,
+            netted_kwh=self.netted_kwh,
+            utility_kwh=self.utility_kwh,
+            utility_export_kwh=self.utility_export_kwh,
+            coverage=self.coverage,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """A JSON-safe dict for the Store and the WebSocket API."""
@@ -83,7 +97,7 @@ class CycleRecord:
             "band": None if self.band is None else [self.band.low, self.band.high],
             "deviation_pct": _finite(self.deviation_pct),
             "calibration_ratio": self.calibration_ratio,
-            "expected_cost": None if self.cost is None else _cost_to_dict(self.cost),
+            "expected_cost": None if self.cost is None else cost_to_dict(self.cost),
             "cost_basis": self.cost_basis,
         }
 
@@ -122,7 +136,8 @@ def _finite(value: float | None) -> float | None:
     return value if value is None or math.isfinite(value) else None
 
 
-def _cost_to_dict(c: CostBreakdown) -> dict[str, float]:
+def cost_to_dict(c: CostBreakdown) -> dict[str, float]:
+    """A JSON-safe cost breakdown."""
     return {
         "billed_kwh": c.billed_kwh,
         "supply": c.supply,
@@ -200,6 +215,29 @@ def build_record(
         calibration_ratio=calibration_ratio(totals),
         cost=expected,
         cost_basis=basis_source,
+    )
+
+
+def reprice(
+    record: CycleRecord,
+    *,
+    tariff: Tariff | None,
+    export_mode: ExportMode = ExportMode.NONE,
+    tolerance: float = DEFAULT_TOLERANCE,
+) -> CycleRecord:
+    """A closed record rebuilt from its own totals with other settings.
+
+    Source and finality are kept; no statistics are needed.
+    """
+    return build_record(
+        record.cycle,
+        record.totals,
+        source=record.source,
+        final=record.final,
+        closed=True,
+        tariff=tariff,
+        export_mode=export_mode,
+        tolerance=tolerance,
     )
 
 
