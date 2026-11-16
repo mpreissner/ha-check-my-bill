@@ -265,12 +265,12 @@ class CheckMyBillCard extends HTMLElement {
 
   /* ---------- events ---------- */
 
-  _toggle(row) {
+  _toggle(row, keyboard) {
     const start = row.dataset.start;
     if (this._expanded.has(start)) this._expanded.delete(start);
     else this._expanded.add(start);
     this._render();
-    this.shadowRoot.querySelector(`tr.row[data-start="${start}"]`)?.focus();
+    if (keyboard) this.shadowRoot.querySelector(`.row[data-start="${start}"]`)?.focus();
   }
 
   _onClick(ev) {
@@ -283,7 +283,7 @@ class CheckMyBillCard extends HTMLElement {
     const row = ev.composedPath().find((el) => el.classList?.contains("row"));
     if (!row) return;
     ev.preventDefault();
-    this._toggle(row);
+    this._toggle(row, true);
   }
 
   /* ---------- formatting ---------- */
@@ -330,12 +330,39 @@ class CheckMyBillCard extends HTMLElement {
     return `${esc(a)} – ${esc(b)}${est}`;
   }
 
+  _status(status) {
+    return STATUS[status] ?? [status, "var(--secondary-text-color)"];
+  }
+
   _pill(status) {
-    const [label, color] = STATUS[status] ?? [status, "var(--secondary-text-color)"];
-    return `<span class="pill" style="--pill:${color}">${esc(label)}</span>`;
+    const [label, color] = this._status(status);
+    return `<span class="pill" style="--pill:${color}"><span class="dot"></span>${esc(label)}</span>`;
   }
 
   /* ---------- rendering ---------- */
+
+  /** Two horizontal bars comparing Home Assistant's meter with the utility's. */
+  _meters(record) {
+    const ha = record.metered_kwh ?? 0;
+    const utility = record.utility_kwh ?? 0;
+    const max = Math.max(ha, utility, 1e-9);
+    const coverage = record.coverage?.utility ?? 0;
+    const partial =
+      record.utility_kwh != null && coverage < 1
+        ? ` <span class="muted">· ${this._pct(coverage)} reported</span>`
+        : "";
+    const bar = (name, cls, value, extra) => `
+      <div class="meter">
+        <div class="meter-label"><span>${name}</span><span class="num">${this._kwh(value)} kWh${extra}</span></div>
+        <div class="track"><div class="fill ${cls}" style="width:${((value ?? 0) / max) * 100}%"></div></div>
+      </div>`;
+    return `<div class="meters">${bar("Home Assistant", "ha", record.metered_kwh, "")}${bar(
+      "Utility",
+      "utility",
+      record.utility_kwh,
+      partial,
+    )}</div>`;
+  }
 
   _summary(record, { label, projected }) {
     const hasTariff = this._data?.has_tariff;
@@ -344,19 +371,39 @@ class CheckMyBillCard extends HTMLElement {
     const total = daysBetween(start, parseDate(record.end));
     const day = Math.min(Math.max(daysBetween(start, today()) + 1, 1), total);
     const open = record.status === "in_progress";
-    const stats = [
-      ["HA kWh", this._kwh(record.metered_kwh)],
-      [
-        "Utility kWh",
-        `${this._kwh(record.utility_kwh)}${
-          coverage < 1 ? ` <span class="muted">(${this._pct(coverage)})</span>` : ""
-        }`,
-      ],
-    ];
+
+    const progress = open
+      ? `
+        <div class="progress" role="progressbar" aria-valuemin="1" aria-valuemax="${total}"
+             aria-valuenow="${day}" aria-label="Day ${day} of ${total}">
+          <div class="progress-fill" style="width:${(day / total) * 100}%"></div>
+        </div>
+        <div class="progress-label muted"><span>Day ${day} of ${total}</span>
+          <span>${total - day === 1 ? "1 day left" : `${total - day} days left`}</span></div>`
+      : "";
+
+    let figures = "";
     if (hasTariff) {
-      stats.push([open ? "Expected to date" : "Expected", this._money(record.expected_cost?.total)]);
-      if (projected !== undefined) stats.push(["Projected", this._money(projected?.total)]);
+      const main =
+        projected !== undefined
+          ? ["Projected bill", this._money(projected?.total)]
+          : ["Expected cost", this._money(record.expected_cost?.total)];
+      const side = projected !== undefined
+        ? [["So far", this._money(record.expected_cost?.total)]]
+        : [];
+      figures = `
+        <div class="figures">
+          <div class="figure main"><div class="figure-label">${esc(main[0])}</div>
+            <div class="figure-value">${main[1]}</div></div>
+          ${side
+            .map(
+              ([k, v]) => `<div class="figure"><div class="figure-label">${esc(k)}</div>
+                <div class="figure-value">${v}</div></div>`,
+            )
+            .join("")}
+        </div>`;
     }
+
     const lag =
       open && coverage < 1
         ? '<div class="note">Utility data lags 1–2 days behind the meter.</div>'
@@ -367,90 +414,126 @@ class CheckMyBillCard extends HTMLElement {
           <div>
             <div class="label">${esc(label)}</div>
             <div class="dates">${this._dates(record)}</div>
-            ${open ? `<div class="muted">Day ${day} of ${total}</div>` : ""}
           </div>
           ${this._pill(record.status)}
         </div>
-        <div class="stats">
-          ${stats
-            .map(([k, v]) => `<div class="stat"><div class="muted">${esc(k)}</div><div class="value">${v}</div></div>`)
-            .join("")}
-        </div>
+        ${progress}
+        ${figures}
+        ${this._meters(record)}
         ${lag}
       </section>`;
   }
 
+  /** The tolerance band as a scale, with a marker where the utility's reading landed. */
+  _band(record) {
+    const [low, high] = record.band;
+    const value = record.utility_kwh;
+    const points = [low, high, ...(value == null ? [] : [value])];
+    const span = Math.max(...points) - Math.min(...points) || 1;
+    const lo = Math.min(...points) - span * 0.35;
+    const hi = Math.max(...points) + span * 0.35;
+    const at = (v) => `${((v - lo) / (hi - lo)) * 100}%`;
+    const [, color] = this._status(record.status);
+    const tol = this._data?.tolerance_pct;
+    let caption = `Expected utility reading ${this._kwh(low)}–${this._kwh(high)} kWh`;
+    if (tol !== undefined) caption += ` (±${esc(tol)}%)`;
+    if (record.deviation_pct) {
+      const sign = record.deviation_pct > 0 ? "+" : "";
+      caption += `; utility is ${sign}${this._kwh(record.deviation_pct, 1)}% outside it`;
+    }
+    const marker =
+      value == null
+        ? ""
+        : `<div class="band-marker" style="left:${at(value)};--pill:${color}"
+              title="Utility ${this._kwh(value)} kWh"></div>`;
+    return `
+      <div class="block">
+        <div class="block-title">Reconciliation</div>
+        <div class="band" aria-hidden="true">
+          <div class="band-range" style="left:${at(low)};width:calc(${at(high)} - ${at(low)})"></div>
+          ${marker}
+        </div>
+        <div class="muted">${caption}.</div>
+      </div>`;
+  }
+
   _details(record) {
-    const lines = [];
+    const blocks = [];
     const cost = record.expected_cost;
     if (cost) {
       const rows = COST_LINES.map(([key, name]) => [name, cost[key]]);
       if (cost.export_credit) rows.push(["Export credit", -cost.export_credit]);
-      lines.push(
-        `<table class="cost">${rows
-          .map(([name, v]) => `<tr><td>${esc(name)}</td><td>${this._money(v)}</td></tr>`)
-          .join("")}<tr class="total"><td>Total</td><td>${this._money(cost.total)}</td></tr></table>`,
-      );
-      lines.push(
-        `<div class="muted">Priced on ${
-          record.cost_basis === "utility" ? "the utility's" : "Home Assistant's"
-        } ${this._kwh(cost.billed_kwh, 1)} kWh.</div>`,
-      );
+      const billed =
+        record.bill?.cost != null
+          ? `<tr class="billed"><td>Utility billed</td><td>${this._money(record.bill.cost)}</td></tr>`
+          : "";
+      blocks.push(`
+        <div class="block">
+          <div class="block-title">Expected cost</div>
+          <table class="cost">${rows
+            .map(([name, v]) => `<tr><td>${esc(name)}</td><td>${this._money(v)}</td></tr>`)
+            .join("")}
+            <tr class="total"><td>Total</td><td>${this._money(cost.total)}</td></tr>${billed}
+          </table>
+          <div class="muted">Priced on ${
+            record.cost_basis === "utility" ? "the utility's" : "Home Assistant's"
+          } ${this._kwh(cost.billed_kwh, 1)} kWh.</div>
+        </div>`);
     }
-    if (record.band) {
-      const tol = this._data?.tolerance_pct;
-      const [low, high] = record.band;
-      let text = `Expected utility kWh: ${this._kwh(low, 1)}–${this._kwh(high, 1)}`;
-      if (tol !== undefined) text += ` (±${esc(tol)}%)`;
-      if (record.deviation_pct) {
-        const sign = record.deviation_pct > 0 ? "+" : "";
-        text += `; utility is ${sign}${this._kwh(record.deviation_pct, 1)}% outside`;
-      }
-      lines.push(`<div>${text}.</div>`);
-    }
+    const side = [this._meters(record)];
+    if (record.band) side.push(this._band(record));
     if (this._data?.export_mode && this._data.export_mode !== "none") {
-      lines.push(
-        `<div>Export: HA ${this._kwh(record.export_kwh, 1)} kWh, utility ${this._kwh(
+      side.push(
+        `<div class="muted">Export: HA ${this._kwh(record.export_kwh, 1)} kWh, utility ${this._kwh(
           record.utility_export_kwh,
           1,
         )} kWh.</div>`,
       );
     }
     if (record.status === "no_data") {
-      lines.push('<div class="muted">The utility has no data for these dates yet.</div>');
+      side.push('<div class="muted">The utility has no data for these dates yet.</div>');
     }
-    return lines.join("") || '<div class="muted">No details.</div>';
+    blocks.push(`<div class="block">${side.join("")}</div>`);
+    return `<div class="details">${blocks.join("")}</div>`;
   }
 
   _table(cycles) {
     if (!cycles.length) return '<div class="muted">No previous cycles yet.</div>';
     const hasTariff = this._data?.has_tariff;
-    const cols = hasTariff ? 5 : 4;
     const rows = cycles
       .map((c) => {
         const open = this._expanded.has(c.start);
-        const row = `
-          <tr class="row" data-start="${esc(c.start)}" tabindex="0" role="button"
-              aria-expanded="${open}">
-            <td>${this._dates(c)}</td>
-            <td class="num">${this._kwh(c.metered_kwh)}</td>
-            <td class="num">${this._kwh(c.utility_kwh)}</td>
-            ${hasTariff ? `<td class="num">${this._money(c.expected_cost?.total)}</td>` : ""}
-            <td>${this._pill(c.status)}</td>
-          </tr>`;
-        return open
-          ? `${row}<tr class="detail"><td colspan="${cols}">${this._details(c)}</td></tr>`
-          : row;
+        const [label, color] = this._status(c.status);
+        const right = hasTariff
+          ? `<div class="row-cost">${this._money(c.expected_cost?.total)}${
+              c.bill?.cost != null
+                ? `<div class="muted small">billed ${this._money(c.bill.cost)}</div>`
+                : ""
+            }</div>`
+          : "";
+        return `
+          <div class="cycle${open ? " open" : ""}">
+            <div class="row" data-start="${esc(c.start)}" tabindex="0" role="button"
+                 aria-expanded="${open}">
+              <span class="status-dot" style="--pill:${color}" title="${esc(label)}"></span>
+              <div class="row-main">
+                <div class="row-dates">${this._dates(c)}</div>
+                <div class="muted small">${esc(label)} · HA ${this._kwh(c.metered_kwh)} · utility ${this._kwh(
+                  c.utility_kwh,
+                )} kWh</div>
+              </div>
+              ${right}
+              <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.41 8.58 12 13.17l4.59-4.59L18 10l-6 6-6-6z"/></svg>
+            </div>
+            ${open ? this._details(c) : ""}
+          </div>`;
       })
       .join("");
     return `
-      <table class="cycles">
-        <thead><tr>
-          <th>Cycle</th><th class="num">HA kWh</th><th class="num">Utility kWh</th>
-          ${hasTariff ? '<th class="num">Expected</th>' : ""}<th>Status</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`;
+      <section>
+        <div class="label section-title">Past cycles</div>
+        <div class="cycles">${rows}</div>
+      </section>`;
   }
 
   _content() {
@@ -478,10 +561,16 @@ class CheckMyBillCard extends HTMLElement {
   _render() {
     if (!this._config) return;
     const title = this._config.title ?? "Electric bill";
+    const header = title
+      ? `<div class="card-header">
+          <span class="badge" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M11 15H6l7-14v8h5l-7 14v-8z"/></svg></span>
+          <h1>${esc(title)}</h1>
+        </div>`
+      : "";
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>
       <ha-card>
-        ${title ? `<h1 class="card-header">${esc(title)}</h1>` : ""}
+        ${header}
         <div class="content">${this._content()}</div>
       </ha-card>`;
   }
@@ -489,37 +578,85 @@ class CheckMyBillCard extends HTMLElement {
 
 const STYLE = `
   :host { display: block; }
-  .card-header { margin: 0; padding: 16px 16px 0; font-size: 20px; font-weight: 400;
+  ha-card { overflow: hidden; }
+  .card-header { display: flex; align-items: center; gap: 12px; padding: 16px 16px 0; }
+  .card-header h1 { margin: 0; font-size: 20px; font-weight: 400; line-height: 1.2;
     color: var(--ha-card-header-color, var(--primary-text-color)); }
-  .content { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 12px; }
-  .muted { color: var(--secondary-text-color); font-size: 0.9em; }
+  .badge { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%;
+    flex: none; color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 15%, transparent); }
+  .badge svg { width: 20px; height: 20px; fill: currentColor; }
+  .content { container-type: inline-size; padding: 16px; display: flex; flex-direction: column; gap: 20px; }
+  .muted { color: var(--secondary-text-color); }
+  .small { font-size: 0.85em; }
+  .num { font-variant-numeric: tabular-nums; }
   .note { color: var(--secondary-text-color); font-size: 0.85em; font-style: italic; }
   .error { color: var(--error-color, #db4437); }
-  .summary .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-  .label { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.05em;
+  .label { font-size: 0.75em; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em;
     color: var(--secondary-text-color); }
-  .dates { font-size: 1.1em; font-weight: 500; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-    gap: 8px; margin-top: 10px; }
-  .stat .value { font-size: 1.2em; font-weight: 500; }
-  .est { font-size: 0.75em; color: var(--secondary-text-color); font-weight: 400; }
-  .pill { display: inline-block; white-space: nowrap; padding: 2px 8px; border-radius: 10px;
-    font-size: 0.8em; color: var(--pill);
-    background: color-mix(in srgb, var(--pill) 15%, transparent);
-    border: 1px solid color-mix(in srgb, var(--pill) 40%, transparent); }
-  table { width: 100%; border-collapse: collapse; }
-  .cycles th { text-align: left; font-weight: 500; font-size: 0.85em;
-    color: var(--secondary-text-color); padding: 4px 4px 6px; }
-  .cycles td { padding: 6px 4px; border-top: 1px solid var(--divider-color, #e0e0e0); }
-  .cycles .num { text-align: right; font-variant-numeric: tabular-nums; }
-  tr.row { cursor: pointer; }
-  tr.row:hover, tr.row:focus-visible { background: var(--secondary-background-color); outline: none; }
-  tr.detail td { border-top: none; padding: 4px 8px 12px; font-size: 0.9em; }
-  tr.detail td > * + * { margin-top: 6px; }
-  .cost { max-width: 280px; }
-  .cost td { padding: 1px 0; border: none; }
+  .est { font-size: 0.7em; font-weight: 500; padding: 1px 6px; border-radius: 8px;
+    vertical-align: middle; color: var(--secondary-text-color);
+    border: 1px dashed var(--divider-color, #bdbdbd); }
+
+  /* summary */
+  .summary { display: flex; flex-direction: column; gap: 14px; }
+  .summary .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .dates { font-size: 1.25em; font-weight: 500; margin-top: 2px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+    padding: 3px 10px; border-radius: 12px; font-size: 0.8em; font-weight: 500; color: var(--pill);
+    background: color-mix(in srgb, var(--pill) 14%, transparent); }
+  .pill .dot, .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pill);
+    flex: none; }
+  .progress { height: 8px; border-radius: 4px; overflow: hidden;
+    background: color-mix(in srgb, var(--primary-color) 15%, transparent); }
+  .progress-fill { height: 100%; border-radius: 4px; background: var(--primary-color); }
+  .progress-label { display: flex; justify-content: space-between; font-size: 0.85em; margin-top: -8px; }
+  .figures { display: flex; flex-wrap: wrap; gap: 8px 32px; align-items: flex-end; }
+  .figure-label { font-size: 0.85em; color: var(--secondary-text-color); }
+  .figure-value { font-size: 1.4em; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .figure.main .figure-value { font-size: 2.2em; font-weight: 400; line-height: 1.1; }
+
+  /* meter comparison */
+  .meters { display: flex; flex-direction: column; gap: 8px; }
+  .meter-label { display: flex; justify-content: space-between; gap: 8px; font-size: 0.85em;
+    margin-bottom: 3px; }
+  .track { height: 6px; border-radius: 3px; background: var(--divider-color, #e0e0e0); overflow: hidden; }
+  .fill { height: 100%; border-radius: 3px; }
+  .fill.ha { background: var(--primary-color); }
+  .fill.utility { background: var(--energy-grid-consumption-color, #488fc2); }
+
+  /* past cycles */
+  .section-title { margin-bottom: 6px; }
+  .cycle { border-top: 1px solid var(--divider-color, #e0e0e0); }
+  .cycle:last-child { border-bottom: 1px solid var(--divider-color, #e0e0e0); }
+  .row { display: grid; grid-template-columns: 8px 1fr auto 20px; align-items: center; gap: 12px;
+    padding: 10px 8px; margin: 0 -8px; cursor: pointer; border-radius: 8px; outline: none; }
+  .row:hover, .row:focus-visible { background: var(--secondary-background-color, rgba(127,127,127,.08)); }
+  .row:focus-visible { box-shadow: inset 0 0 0 2px var(--primary-color); }
+  .row-dates { font-weight: 500; }
+  .row-cost { text-align: right; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .row-cost .muted { font-weight: 400; }
+  .chevron { width: 20px; height: 20px; fill: var(--secondary-text-color); transition: transform .2s; }
+  .cycle.open .chevron { transform: rotate(180deg); }
+
+  /* details */
+  .details { display: grid; grid-template-columns: 1fr; gap: 16px; padding: 4px 0 16px 20px; }
+  @container (min-width: 480px) { .details { grid-template-columns: 1fr 1fr; gap: 24px; } }
+  .block { display: flex; flex-direction: column; gap: 8px; font-size: 0.9em; min-width: 0; }
+  .block .block { font-size: 1em; }
+  .block-title { font-weight: 500; }
+  table.cost { width: 100%; border-collapse: collapse; }
+  .cost td { padding: 2px 0; }
   .cost td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
-  .cost .total td { border-top: 1px solid var(--divider-color, #e0e0e0); font-weight: 500; }
+  .cost .total td { border-top: 1px solid var(--divider-color, #e0e0e0); font-weight: 500; padding-top: 4px; }
+  .cost .billed td { color: var(--secondary-text-color); }
+  .band { position: relative; height: 14px; }
+  .band::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 4px;
+    border-radius: 2px; background: var(--divider-color, #e0e0e0); }
+  .band-range { position: absolute; top: 3px; height: 8px; border-radius: 4px;
+    background: color-mix(in srgb, var(--success-color, #43a047) 35%, transparent); }
+  .band-marker { position: absolute; top: 0; width: 4px; height: 14px; margin-left: -2px;
+    border-radius: 2px; background: var(--pill); }
 `;
 
 /* ---------- visual editor ---------- */
