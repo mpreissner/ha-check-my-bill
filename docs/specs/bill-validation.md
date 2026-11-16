@@ -1,6 +1,8 @@
 # Bill validation: billing-cycle kWh and expected cost from Energy dashboard data
 
-Status: spec rev 1. Base: dev @ f061a56 (scaffold only).
+Status: spec rev 2. Base: dev @ f061a56 (scaffold only).
+Rev 2 applies the user's answers to Q6–Q8 (§10). Bill entry is removed, because the
+integration is informational and not a bill tracker.
 Author: architect (main session). Scope: v1 of the integration. Electric only.
 It covers the config flow, tariff model, cycle records, reconciliation, sensors, a
 WebSocket API and a Lovelace card. Gas is out of scope (§9).
@@ -160,17 +162,22 @@ as a record when it closes.
                "final": true, "metered_kwh": 0.0, "utility_kwh": 0.0, "export_kwh": 0.0,
                "netted_kwh": 0.0, "expected_cost": {"supply": 0.0, "delivery": 0.0,
                "fixed": 0.0, "tax": 0.0, "total": 0.0}, "tariff_version": 3,
-               "billed": {"kwh": null, "amount": null}, "status": "ok|warn|mismatch|no_data"}]}
+               "coverage": {"import": 1.0, "utility": 1.0},
+               "status": "ok|warn|mismatch|no_data"}]}
   ```
-- **Backfill on first setup:** create records for up to 12 previous cycles.
+- **Backfill on first setup:** create records for **up to 12** previous cycles, limited
+  to the history that actually exists.
+  - Step back cycle by cycle and stop at the first cycle where neither `import_stat` nor
+    `utility_import_stat` has any hourly data.
+  - A cycle that is only partly covered is kept, with its `coverage` recorded and its status
+    set to `no_data` if the utility side is missing.
   - Boundaries are estimated by stepping back from the current start in whole-month steps
     on the same day.
   - These records are marked `source: backfill` and labelled "estimated dates".
   - Each estimated boundary can be edited (§3.6). Editing recomputes the record.
-- **Bill entry:** the user can enter the billed kWh and $ amount for a cycle through a
-  service or the card. The reconciliation (§3.5) then compares the expected and metered
-  figures against the actual bill. Without bill entry, "validate the bill" means the user
-  compares visually against a PDF.
+- **No bill entry.** The integration is informational, not a bill tracker. It shows
+  measured kWh, utility kWh and expected $ for each cycle, and the user compares those
+  against their bill themselves.
 
 ### 3.3 Tariff model
 
@@ -237,8 +244,8 @@ Reading the data:
 
 ### 3.5 Reconciliation
 
-The status for each cycle is computed from `utility_kwh`, or from `billed.kwh` when the
-user entered it (that takes precedence).
+The status for each cycle compares `utility_kwh` (the utility's metered figure) against
+the HA-measured band.
 
 - **Expected band:**
   - `export_mode` is `none` or `separate_rate`:
@@ -246,18 +253,16 @@ user entered it (that takes precedence).
   - `export_mode` is `net_metering`: `(metered − export) × (1 ± tol)`.
   - `tol` defaults to 2%.
 - **Status:**
-  - `ok`: the utility or billed kWh is inside the band.
+  - `ok`: the utility kWh is inside the band.
   - `warn`: within 2 × tol of the band.
   - `mismatch`: further out than that.
-  - `no_data`: there is no utility statistic or billed value. Only the expected cost is
-    shown.
-- **Dollar check:** if `billed.amount` is set, compare it to the `expected_cost.total` that
-  the tariff gives for the billed kWh. Show the difference in $ and %, with the same
-  ok/warn/mismatch thresholds (tolerance $1 or 2%, whichever is larger). This catches
-  tariff entry errors as well as billing errors, and the card says so.
+  - `no_data`: there is no utility statistic. Only the HA kWh and expected cost are shown.
+- **Why 2%:** the user's CTs are revenue grade, so measured and billed kWh should agree
+  closely. 2% is the starting default and can be changed in options.
 - **Calibration hint (display only):** in cycles with no export, show the ratio
-  `utility_kwh / metered_kwh`. A stable ratio around 1.02 means CT calibration, not a
-  billing problem.
+  `utility_kwh / metered_kwh`. A stable offset means a calibration difference between
+  the CTs and the meter, not a billing problem. With revenue-grade CTs it should stay well
+  under the tolerance; the ~1.9% seen in §2.3 is worth watching.
 
 ### 3.6 Entities, services, WebSocket API
 
@@ -276,7 +281,6 @@ All entities hang off one service-type device per entry.
 
 **Services**
 
-- `check_my_bill.record_bill` takes `entry_id`, `cycle_start`, `kwh?` and `amount?`.
 - `check_my_bill.set_cycle_dates` takes `entry_id`, `cycle_start`, `start` and `end`. It
   edits estimated boundaries and recomputes the record.
 - `check_my_bill.recompute` takes `entry_id` and `cycle_start?`.
@@ -287,7 +291,8 @@ All entities hang off one service-type device per entry.
   cycle (live).
 - `check_my_bill/range` takes `{entry_id, start, end}` and returns the same computation for
   an arbitrary range. The card uses this when it follows the Energy date picker.
-- `check_my_bill/record_bill` is the write path for the card. It requires admin.
+
+The card is read-only; there is no write path over WebSocket.
 
 **Repairs**
 
@@ -321,9 +326,8 @@ cycles: 6             # how many past cycles to list
    utility kWh with coverage % and lag note, expected $ to date, projected $, and a status
    pill.
 2. **Previous cycles table:** dates (marked "est." when backfilled), HA kWh, utility kWh,
-   billed kWh and $ (when entered), expected $, and status. Clicking a row expands a cost
-   breakdown (supply, delivery, riders, fixed, tax) and the reconciliation band.
-3. **Enter bill amount:** for admins, an inline form that calls `record_bill`.
+   expected $, and status. Clicking a row expands a cost breakdown (supply, delivery,
+   riders, fixed, tax) and the reconciliation band.
 
 **`follow_energy` mode**
 
@@ -371,7 +375,7 @@ Store and WebSocket, using `pytest-homeassistant-custom-component`.
   `tools/sanitize.py` maps real IDs to synthetic ones, scales or jitters values when asked,
   and writes to `tests_ha/fixtures/`. The diff is reviewed before any commit.
 - **Diagnostics** (`diagnostics.py`) redact statistic IDs that contain account-like digit
-  runs, and redact entered bill amounts.
+  runs.
 - **Nothing leaves HA.** There are no network calls at all.
 
 ## 6. Testing without a dev instance
@@ -422,7 +426,7 @@ CI (the existing workflow) runs ruff, `tests/`, `tests_ha/`, hassfest and HACS v
 | R2 | Opower renames stats or sensors after re-auth | repair issue plus a reconfigure step |
 | R3 | Backfilled cycle boundaries are wrong by days | marked "est.", editable, and the reconciliation band absorbs about 1 day |
 | R4 | Utility lag makes the current cycle look like a mismatch | coverage < 100% → `in_progress`, never `mismatch` |
-| R5 | Tariff entry errors look like billing errors | the card states which check failed (kWh vs $); the dollar check is labelled "tariff or bill" |
+| R5 | Tariff entry errors make expected $ wrong | the card shows the cost breakdown per line, so a bad rate is easy to spot; status is based on kWh only, never on $ |
 | R6 | Users with a utility other than Opower | manual cycle mode; the utility statistic can be any statistic |
 
 ## 9. Scope
@@ -432,7 +436,7 @@ CI (the existing workflow) runs ruff, `tests/`, `tests_ha/`, hassfest and HACS v
 - One electric account per config entry.
 - Flat or seasonal rates, optional tiers, fixed charges, riders, tax.
 - Three export modes.
-- Cycle history, backfill, bill entry, the card, sensors.
+- Cycle history, backfill (up to 12 cycles, as far as data exists), the card, sensors.
 
 **Out of v1:**
 
@@ -440,6 +444,7 @@ CI (the existing workflow) runs ruff, `tests/`, `tests_ha/`, hassfest and HACS v
 - Time-of-use rates.
 - Net-metering credit carry-over.
 - Demand charges.
+- Entering actual bill amounts or tracking bills (the integration is informational).
 - Importing rate schedules (OpenEI/URDB).
 - Reading actual bill totals from Opower. That would need an upstream change to expose
   `AggregateType.BILL` reads.
@@ -454,6 +459,6 @@ CI (the existing workflow) runs ruff, `tests/`, `tests_ha/`, hassfest and HACS v
 | Q3 | Gas? | Electric only for v1 (user) |
 | Q4 | Repo visibility? | Public, for GitHub-hosted CI (user) |
 | Q5 | Export compensation? | None. Zero-export with small uncompensated spill, so `export_mode: none` (user) |
-| Q6 | Backfill depth? | **Open.** Proposed: 12 cycles |
-| Q7 | Bill entry in v1, or kWh and expected $ only? | **Open.** Proposed: include it, since it is what makes "validate the bill" literal |
-| Q8 | Default tolerance? | **Open.** Proposed: 2%, from the §2.3 evidence |
+| Q6 | Backfill depth? | Up to 12 cycles, limited to the history actually available (user) |
+| Q7 | Bill entry in v1? | No. The integration is informational, not a bill tracker (user) |
+| Q8 | Default tolerance? | 2%. The CTs are revenue grade, so measured and billed values should agree closely (user) |
