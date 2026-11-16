@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -14,16 +13,13 @@ from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     async_import_statistics,
 )
-from homeassistant.config_entries import ConfigEntryState, ConfigFlow
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-from homeassistant.loader import async_get_integration
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
-    mock_config_flow,
-    mock_platform,
 )
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
@@ -100,21 +96,6 @@ async def seed_utility(hass: HomeAssistant, start: datetime, end: datetime) -> N
         hass, _meta(UTILITY, "opower"), _rows(start, end, UTILITY_PER_HOUR, ORIGIN)
     )
     await async_wait_recording_done(hass)
-
-
-class _PlaceholderFlow(ConfigFlow):
-    """Stands in for the config flow, which lands in phase 3."""
-
-    VERSION = 1
-
-
-@pytest.fixture(autouse=True)
-async def placeholder_flow(hass: HomeAssistant) -> AsyncIterator[None]:
-    """HA refuses to set up entries of a domain without a config flow."""
-    await async_get_integration(hass, DOMAIN)  # else mock_platform mocks the whole integration
-    mock_platform(hass, f"{DOMAIN}.config_flow", None)
-    with mock_config_flow(DOMAIN, _PlaceholderFlow):
-        yield
 
 
 def entity_id(hass: HomeAssistant, entry: MockConfigEntry, key: str) -> str:
@@ -252,3 +233,53 @@ async def test_reload_keeps_history_without_backfilling_again(
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.runtime_data.data.history == before
+
+
+async def _reconfigure(hass: HomeAssistant, entry: MockConfigEntry, data: dict[str, Any]) -> None:
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], data)
+    assert result["reason"] == "reconfigure_successful"
+    await hass.async_block_till_done()
+
+
+async def test_reconfigured_statistics_discard_history(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    freezer.move_to(local(2026, 11, 10, 12, 30))
+    await seed_import(hass, ORIGIN, local(2026, 11, 10, 12))
+    other = "sensor.test_other_import"
+    async_import_statistics(
+        hass, _meta(other, "recorder"), _rows(ORIGIN, local(2026, 11, 10, 12), 2.0, ORIGIN)
+    )
+    await async_wait_recording_done(hass)
+    entry = await setup_entry(hass, {CONF_CYCLE_DAY: 3})
+    before = entry.runtime_data.data.history
+    cycle_hours = len(hours(local(2026, 10, 3), local(2026, 11, 3)))  # 745: DST ends Nov 1
+    assert before[0].metered_kwh == pytest.approx(cycle_hours)
+
+    await _reconfigure(
+        hass, entry, {CONF_IMPORT_STAT: other, CONF_UTILITY_IMPORT_STAT: UTILITY, CONF_CYCLE_DAY: 3}
+    )
+    after = entry.runtime_data.data.history
+    assert len(after) == len(before)
+    assert after[0].metered_kwh == pytest.approx(2 * cycle_hours)  # rebuilt from the new meter
+
+
+async def test_reconfigured_cycle_keeps_history(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    freezer.move_to(local(2026, 11, 10, 12, 30))
+    await seed_import(hass, ORIGIN, local(2026, 11, 10, 12))
+    entry = await setup_entry(hass, {CONF_CYCLE_DAY: 3})
+    before = entry.runtime_data.data.history
+
+    await _reconfigure(
+        hass,
+        entry,
+        {CONF_IMPORT_STAT: IMPORT, CONF_UTILITY_IMPORT_STAT: UTILITY, CONF_CYCLE_DAY: 4},
+    )
+    assert entry.data[CONF_CYCLE_DAY] == 4
+    # The move closes Nov 3 as a one-day cycle; the older records are kept, not rebuilt.
+    stub, *kept = entry.runtime_data.data.history
+    assert (stub.start.isoformat(), stub.end.isoformat()) == ("2026-11-03", "2026-11-04")
+    assert kept == list(before)

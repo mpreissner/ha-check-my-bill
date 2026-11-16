@@ -7,7 +7,6 @@ the end of DST, with a one-hour gap in the HA statistics.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -20,14 +19,9 @@ from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     async_import_statistics,
 )
-from homeassistant.config_entries import ConfigEntryState, ConfigFlow
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.loader import async_get_integration
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    mock_config_flow,
-    mock_platform,
-)
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
@@ -48,19 +42,6 @@ FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "one_closed_cycle.jso
 START_ENTITY = "sensor.test_current_bill_start_date"
 END_ENTITY = "sensor.test_current_bill_end_date"
 TARIFF = [{"effective_from": "2020-01-01", "supply": 0.11, "delivery": 0.07, "fixed_monthly": 8.0}]
-
-
-class _PlaceholderFlow(ConfigFlow):
-    VERSION = 1
-
-
-@pytest.fixture(autouse=True)
-async def placeholder_flow(hass: HomeAssistant) -> AsyncIterator[None]:
-    """The config flow lands in phase 3; HA refuses entries of a domain without one."""
-    await async_get_integration(hass, DOMAIN)
-    mock_platform(hass, f"{DOMAIN}.config_flow", None)
-    with mock_config_flow(DOMAIN, _PlaceholderFlow):
-        yield
 
 
 def _rows(changes: list[float | None]) -> list[dict[str, Any]]:

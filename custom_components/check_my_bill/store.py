@@ -25,6 +25,8 @@ class StoredState:
     current_source: Source | None = None
     cycles: list[CycleRecord] = field(default_factory=list)
     """Closed cycles, newest first."""
+    sources: dict[str, str | None] | None = None
+    """The statistic IDs the records were computed from; None before this was stored."""
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-safe form."""
@@ -37,12 +39,15 @@ class StoredState:
                 "source": self.current_source.value,
             },
             "cycles": [record.to_dict() for record in self.cycles],
+            "sources": self.sources,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> StoredState:
         """Load, skipping records that no longer parse rather than losing the rest."""
         state = cls()
+        if isinstance(sources := data.get("sources"), dict):
+            state.sources = sources
         if current := data.get("current"):
             try:
                 state.current = Cycle(
