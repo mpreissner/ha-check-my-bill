@@ -12,7 +12,7 @@ cycles it shows:
 - a projection of the current cycle's cost.
 
 > [!WARNING]
-> **Beta.** This is a pre-release (`0.1.0b1`). Expect rough edges, and check the numbers
+> **Beta.** This is a pre-release (`0.1.0b2`). Expect rough edges, and check the numbers
 > against a real bill before relying on them. Please report problems in
 > [Issues](https://github.com/mpreissner/ha-check-my-bill/issues).
 
