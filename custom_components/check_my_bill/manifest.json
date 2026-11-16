@@ -2,6 +2,7 @@
   "domain": "check_my_bill",
   "name": "Check My Bill",
   "after_dependencies": [
+    "frontend",
     "opower"
   ],
   "codeowners": [
@@ -10,6 +11,7 @@
   "config_flow": true,
   "dependencies": [
     "energy",
+    "http",
     "recorder",
     "websocket_api"
   ],

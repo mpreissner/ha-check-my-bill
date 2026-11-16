@@ -11,6 +11,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from . import issues
+from .card import async_register_card
 from .const import DOMAIN
 from .coordinator import CheckMyBillConfigEntry, CheckMyBillCoordinator
 from .services import async_setup_services
@@ -22,9 +23,10 @@ PLATFORMS = [Platform.SENSOR]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register the actions and WebSocket commands, which exist while no entry is loaded."""
+    """Register the actions, WebSocket commands and card, which exist while no entry is loaded."""
     async_setup_services(hass)
     async_setup_websocket(hass)
+    await async_register_card(hass)
     return True
 
 
