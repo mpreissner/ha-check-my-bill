@@ -1,0 +1,9 @@
+{
+  "domain": "opower",
+  "name": "Opower (dev stub)",
+  "codeowners": [],
+  "documentation": "https://github.com/mpreissner/ha-check-my-bill",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "version": "0.0.0"
+}

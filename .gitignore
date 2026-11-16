@@ -28,3 +28,6 @@ config_entry-*.json
 mempalace.yaml
 entities.json
 .mempalace/
+
+# Local dev Home Assistant config (tools/seed_dev.py); its database holds copied real data.
+scratch_config/
