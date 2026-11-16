@@ -1,0 +1,30 @@
+.env
+*.pyc
+__pycache__/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# uv writes this on first `uv run`; nothing here is published as a package.
+uv.lock
+
+# Local HA credentials (HA_URL / HA_TOKEN) used by tools/ to read a live instance.
+.env*
+
+# Snapshots pulled from a live Home Assistant carry real site and account data.
+# Sanitized copies used by tests go in tests/fixtures/ instead.
+snapshots/
+diagnostics/
+config_entry-*.json
+
+.claude/
+.DS_Store
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json
+.mempalace/
