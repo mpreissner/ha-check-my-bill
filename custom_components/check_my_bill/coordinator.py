@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
 
 from homeassistant.config_entries import ConfigEntry
@@ -157,6 +157,12 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         today = now.date()
         if self._state is None:
             self._state = await self.store.async_load()
+            sources = asdict(self.ids)
+            if self._state.sources not in (None, sources):
+                # Reconfigured onto other statistics: the stored records describe other meters.
+                _LOGGER.info("Statistics changed; discarding stored cycle history")
+                self._state = StoredState()
+            self._state.sources = sources
         state = self._state
 
         found = self._configured_cycle(today)

@@ -7,7 +7,7 @@
   "codeowners": [
     "@mpreissner"
   ],
-  "config_flow": false,
+  "config_flow": true,
   "dependencies": [
     "energy",
     "recorder"
