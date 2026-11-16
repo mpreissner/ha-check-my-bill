@@ -193,8 +193,9 @@ Tariff (versioned; each version has effective_from date)
   fixed_daily        $ per day (alternative/extra; some utilities bill per day)
   riders_per_kwh     list of {name, $/kWh}   (surcharges, EmPOWER-style programs)
   tax_pct            % applied to subtotal
-  export_mode        none | net_metering | separate_rate
   export_rate        $/kWh (separate_rate only)
+Tariff-level (not versioned)
+  export_mode        none | net_metering | separate_rate
 ```
 
 - **Time-of-use** is out of scope for v1 (§9). The model leaves room for it: a rate can
@@ -256,6 +257,9 @@ the HA-measured band.
   - `ok`: the utility kWh is inside the band.
   - `warn`: within 2 × tol of the band.
   - `mismatch`: further out than that.
+  - Incomplete data (import, export or utility coverage below 100%) gives `in_progress`
+    for an open cycle and `no_data` for a closed one, never `mismatch`. Missing export
+    hours would otherwise inflate the netted low edge.
   - `no_data`: there is no utility statistic. Only the HA kWh and expected cost are shown.
 - **Why 2%:** the user's CTs are revenue grade, so measured and billed kWh should agree
   closely. 2% is the starting default and can be changed in options.
