@@ -16,7 +16,7 @@ uv.lock
 .env*
 
 # Snapshots pulled from a live Home Assistant carry real site and account data.
-# Sanitized copies used by tests go in tests/fixtures/ instead.
+# Sanitized copies used by tests go in tests_ha/fixtures/ instead.
 snapshots/
 diagnostics/
 config_entry-*.json
@@ -28,3 +28,6 @@ config_entry-*.json
 mempalace.yaml
 entities.json
 .mempalace/
+
+# Local dev Home Assistant config (tools/seed_dev.py); its database holds copied real data.
+scratch_config/

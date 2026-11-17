@@ -19,6 +19,9 @@ dev = [
 # Run with `pytest -o pythonpath=. tests_ha`.
 ha = [
     "pytest-homeassistant-custom-component>=0.13.366",
+    # Not pulled in by the harness; HA's opower integration and tests_ha/test_opower_bills.py
+    # import it. Match the version Home Assistant's opower manifest pins.
+    "opower==0.22.3",
 ]
 
 [tool.ruff]
