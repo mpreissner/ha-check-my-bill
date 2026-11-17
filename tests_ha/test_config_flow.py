@@ -32,7 +32,6 @@ from custom_components.check_my_bill.const import (
     CONF_CYCLE_START_ENTITY,
     CONF_EXPORT_MODE,
     CONF_EXPORT_STAT,
-    CONF_HEAT_CONTENT,
     CONF_IMPORT_STAT,
     CONF_METER,
     CONF_TARIFF,
@@ -549,13 +548,8 @@ async def test_gas_without_opower(hass: HomeAssistant) -> None:
     assert result["step_id"] == "units"
     assert _defaults(result) == {CONF_UNIT: "thm"}  # no utility statistic to ask about
 
-    # ft³ against therms needs the heat content.
+    # ft³ against therms converts at 1 CCF = 1 thm; nothing more to ask.
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_UNIT: "thm"})
-    assert result["step_id"] == "heat_content"
-    assert _defaults(result) == {CONF_HEAT_CONTENT: 1.037}
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_HEAT_CONTENT: 1.05}
-    )
     assert result["step_id"] == "cycle"
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_CYCLE_DAY: 3})
     assert result["step_id"] == "tariff"
@@ -571,21 +565,10 @@ async def test_gas_without_opower(hass: HomeAssistant) -> None:
         CONF_METER: "gas",
         CONF_IMPORT_STAT: GAS_METER,
         CONF_UNIT: "thm",
-        CONF_HEAT_CONTENT: 1.05,
         CONF_CYCLE_DAY: 3,
     }
     assert result["options"][CONF_EXPORT_MODE] == "none"
     assert result["options"][CONF_TOLERANCE] == 5.0
-
-
-async def test_gas_same_kind_skips_heat_content(hass: HomeAssistant) -> None:
-    await _meter_stat(hass, GAS_METER, "ft³")
-    result = await _gas_flow(hass)
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_IMPORT_STAT: GAS_METER}
-    )
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_UNIT: "CCF"})
-    assert result["step_id"] == "cycle"
 
 
 async def test_gas_opower_account_and_forecast_unit(hass: HomeAssistant) -> None:
@@ -611,13 +594,8 @@ async def test_gas_opower_account_and_forecast_unit(hass: HomeAssistant) -> None
     # The forecast says therms, though the statistic claims CCF.
     assert _defaults(result) == {CONF_UNIT: "thm", CONF_UTILITY_UNIT: "thm"}
 
-    # CCF meter, therm data and bill: mixed.
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_UNIT: "thm", CONF_UTILITY_UNIT: "thm"}
-    )
-    assert result["step_id"] == "heat_content"
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_HEAT_CONTENT: 1.037}
     )
     assert result["step_id"] == "cycle"
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_CYCLE_DAY: 3})
@@ -659,7 +637,7 @@ def _gas_entry(hass: HomeAssistant, **data: Any) -> MockConfigEntry:
     return entry
 
 
-async def test_gas_reconfigure_to_a_mixed_unit_adds_heat_content(hass: HomeAssistant) -> None:
+async def test_gas_reconfigure_billing_unit(hass: HomeAssistant) -> None:
     await _meter_stat(hass, GAS_METER, "ft³")
     entry = _gas_entry(hass, **{CONF_UNIT: "CCF"})
     result = await entry.start_reconfigure_flow(hass)
@@ -677,22 +655,14 @@ async def test_gas_reconfigure_to_a_mixed_unit_adds_heat_content(hass: HomeAssis
         CONF_IMPORT_STAT: GAS_METER,
         CONF_CYCLE_DAY: 3,
         CONF_UNIT: "thm",
-        CONF_HEAT_CONTENT: 1.037,
     }
 
 
 async def test_gas_settings(hass: HomeAssistant) -> None:
     await _meter_stat(hass, GAS_METER, "ft³")
-    entry = _gas_entry(hass, **{CONF_UNIT: "CCF"})
+    entry = _gas_entry(hass, **{CONF_UNIT: "thm"})
     result = await _options(hass, entry, "settings")
-    assert _defaults(result) == {CONF_TOLERANCE: 5.0}  # no export mode, units not mixed
-
-    entry = _gas_entry(hass, **{CONF_UNIT: "thm", CONF_HEAT_CONTENT: 1.037})
-    entry._unique_id = "other"
-    result = await _options(hass, entry, "settings")
-    assert _defaults(result) == {CONF_TOLERANCE: 5.0, CONF_HEAT_CONTENT: 1.037}
-    await hass.config_entries.options.async_configure(
-        result["flow_id"], {CONF_TOLERANCE: 4.0, CONF_HEAT_CONTENT: 1.06}
-    )
-    assert entry.options[CONF_HEAT_CONTENT] == 1.06
+    assert _defaults(result) == {CONF_TOLERANCE: 5.0}  # no export mode
+    await hass.config_entries.options.async_configure(result["flow_id"], {CONF_TOLERANCE: 4.0})
+    assert entry.options[CONF_TOLERANCE] == 4.0
     assert CONF_EXPORT_MODE not in entry.options or entry.options[CONF_EXPORT_MODE] == "none"

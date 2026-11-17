@@ -19,8 +19,6 @@ CONF_UNIT = "unit"
 """The billing unit; ``kWh`` when absent."""
 CONF_UTILITY_UNIT = "utility_unit"
 """The utility statistic's real unit, when its metadata is wrong (Opower gas)."""
-CONF_HEAT_CONTENT = "heat_content"
-"""Therms per CCF. In data from setup; an options value overrides it."""
 
 # Config entry options.
 CONF_TARIFF = "tariff"
@@ -30,7 +28,6 @@ CONF_TOLERANCE = "tolerance"
 
 DEFAULT_TOLERANCE_PCT = 2.0
 DEFAULT_GAS_TOLERANCE_PCT = 5.0
-DEFAULT_HEAT_CONTENT = 1.037
 
 UPDATE_INTERVAL = timedelta(hours=1)
 BACKFILL_MAX_CYCLES = 12

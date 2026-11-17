@@ -38,7 +38,6 @@ from .const import (
     CONF_CYCLE_START_ENTITY,
     CONF_EXPORT_MODE,
     CONF_EXPORT_STAT,
-    CONF_HEAT_CONTENT,
     CONF_IMPORT_STAT,
     CONF_METER,
     CONF_TARIFF,
@@ -48,13 +47,12 @@ from .const import (
     CONF_UTILITY_IMPORT_STAT,
     CONF_UTILITY_UNIT,
     DEFAULT_GAS_TOLERANCE_PCT,
-    DEFAULT_HEAT_CONTENT,
     DEFAULT_TOLERANCE_PCT,
     DOMAIN,
 )
 from .core.serde import tariff_from_options, version_from_dict, version_to_dict
 from .core.tariff import ExportMode, RateSpec, TariffVersion
-from .core.units import CCF, KWH, THERM, Meter, mixed
+from .core.units import CCF, KWH, THERM, Meter
 from .discovery import OpowerAccount, gas_statistics, grid_statistics, opower_accounts
 from .opower_bills import account_unit
 from .stats import ENERGY, VOLUME
@@ -118,11 +116,6 @@ _GAS_UNIT = SelectSelector(
     SelectSelectorConfig(
         options=[SelectOptionDict(value=u, label=_UNIT_LABELS[u]) for u in GAS_UNITS],
         mode=SelectSelectorMode.DROPDOWN,
-    )
-)
-_HEAT_CONTENT = NumberSelector(
-    NumberSelectorConfig(
-        min=0.5, max=2.0, step="any", mode=NumberSelectorMode.BOX, unit_of_measurement="thm/CCF"
     )
 )
 
@@ -239,17 +232,6 @@ async def _electric_error(hass: Any, statistic_ids: list[str | None]) -> str | N
     if any(_is_gas_only_unit(u) for u in units.values()):
         return "not_an_electric_statistic"
     return None
-
-
-async def _needs_heat_content(hass: Any, data: dict[str, Any]) -> bool:
-    """Whether a statistic and the billing unit are a volume and an energy (gas.md §2.1)."""
-    imports = data.get(CONF_IMPORT_STAT)
-    utility = data.get(CONF_UTILITY_IMPORT_STAT)
-    units = await _stat_units(hass, [imports, utility])
-    sources = [units.get(imports) if imports else None]
-    if utility:
-        sources.append(data.get(CONF_UTILITY_UNIT) or units.get(utility))
-    return mixed(sources, data.get(CONF_UNIT, KWH), volume=VOLUME, energy=ENERGY)
 
 
 def _meter(data: Any) -> Meter:
@@ -416,8 +398,6 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
             self._data[CONF_UNIT] = user_input[CONF_UNIT]
             if utility and (utility_unit := user_input.get(CONF_UTILITY_UNIT)):
                 self._data[CONF_UTILITY_UNIT] = utility_unit
-            if await _needs_heat_content(self.hass, self._data):
-                return await self.async_step_heat_content()
             return await self._async_step_after_utility()
 
         fields: dict[Any, Any] = {vol.Required(CONF_UNIT, default=THERM): _GAS_UNIT}
@@ -427,18 +407,6 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
                 guess = (await _stat_units(self.hass, [utility])).get(utility)
             fields[vol.Required(CONF_UTILITY_UNIT, default=guess or CCF)] = _GAS_UNIT
         return self.async_show_form(step_id="units", data_schema=vol.Schema(fields))
-
-    async def async_step_heat_content(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Therms per CCF, from the bill's therm factor."""
-        if user_input is not None:
-            self._data[CONF_HEAT_CONTENT] = float(user_input[CONF_HEAT_CONTENT])
-            return await self._async_step_after_utility()
-        schema = vol.Schema(
-            {vol.Required(CONF_HEAT_CONTENT, default=DEFAULT_HEAT_CONTENT): _HEAT_CONTENT}
-        )
-        return self.async_show_form(step_id="heat_content", data_schema=schema)
 
     async def async_step_cycle(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manual cycle: the meter-read day, or the last bill's end date."""
@@ -535,20 +503,12 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
                 # The meter type and setup-time units are kept; gas.md §2.3.
                 kept = {
                     k: entry.data[k]
-                    for k in (CONF_METER, CONF_UNIT, CONF_UTILITY_UNIT, CONF_HEAT_CONTENT)
+                    for k in (CONF_METER, CONF_UNIT, CONF_UTILITY_UNIT)
                     if k in entry.data
                 }
                 data = {**kept, **{k: v for k, v in user_input.items() if v not in (None, "")}}
                 if not data.get(CONF_UTILITY_IMPORT_STAT):
                     data.pop(CONF_UTILITY_UNIT, None)
-                if (
-                    gas
-                    and CONF_HEAT_CONTENT not in data
-                    and CONF_HEAT_CONTENT not in entry.options
-                    and await _needs_heat_content(self.hass, data)
-                ):
-                    # A new billing unit made the units mixed; the settings can correct it.
-                    data[CONF_HEAT_CONTENT] = DEFAULT_HEAT_CONTENT
                 if CONF_CYCLE_DAY in data:
                     data[CONF_CYCLE_DAY] = int(data[CONF_CYCLE_DAY])
                 unique_id = data.get(CONF_UTILITY_IMPORT_STAT) or data[CONF_IMPORT_STAT]
@@ -672,16 +632,13 @@ class CheckMyBillOptionsFlow(OptionsFlow):
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Tolerance and export mode; tolerance and heat content for gas."""
+        """Tolerance, and the export mode for electric."""
         if user_input is not None:
             changes: dict[str, Any] = {CONF_TOLERANCE: float(user_input[CONF_TOLERANCE])}
             if CONF_EXPORT_MODE in user_input:
                 changes[CONF_EXPORT_MODE] = user_input[CONF_EXPORT_MODE]
-            if CONF_HEAT_CONTENT in user_input:
-                changes[CONF_HEAT_CONTENT] = float(user_input[CONF_HEAT_CONTENT])
             return self._save(**changes)
         options = self.config_entry.options
-        data = self.config_entry.data
         tolerance = DEFAULT_GAS_TOLERANCE_PCT if self._gas else DEFAULT_TOLERANCE_PCT
         fields: dict[Any, Any] = {
             vol.Required(CONF_TOLERANCE, default=options.get(CONF_TOLERANCE, tolerance)): (
@@ -690,7 +647,4 @@ class CheckMyBillOptionsFlow(OptionsFlow):
         }
         if not self._gas:
             fields[vol.Required(CONF_EXPORT_MODE, default=self._export_mode())] = _EXPORT_MODE
-        elif CONF_HEAT_CONTENT in data or await _needs_heat_content(self.hass, dict(data)):
-            heat = options.get(CONF_HEAT_CONTENT, data.get(CONF_HEAT_CONTENT, DEFAULT_HEAT_CONTENT))
-            fields[vol.Required(CONF_HEAT_CONTENT, default=heat)] = _HEAT_CONTENT
         return self.async_show_form(step_id="settings", data_schema=vol.Schema(fields))

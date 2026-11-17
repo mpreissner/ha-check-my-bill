@@ -65,9 +65,8 @@ Add a second entry and choose **Gas** on the first page.
 
 - **Unit.** Setup asks which unit your bill charges by: therms, CCF, m³ or kWh. Quantities,
   rates and sensors all use that unit.
-- **Heat content.** Converting between a volume (your meter's ft³ or CCF) and an energy (the
-  bill's therms) needs your bill's "therm factor". Setup asks for it only when the units are
-  mixed, and you can update it under **Configure**.
+- **CCF and therms.** A CCF counts as one therm, as most US utilities bill. A meter in ft³
+  or m³ works with a bill in therms or kWh through that rate.
 - **Opower's units.** Opower labels all gas data CCF, even when the utility reports therms.
   Setup reads the real unit from your account and lets you correct it.
 - **Comparison by day.** Gas is compared by whole day, because utilities report gas usage

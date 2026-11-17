@@ -14,6 +14,7 @@ from homeassistant.components.recorder.statistics import (
 )
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.util.unit_conversion import EnergyConverter
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
@@ -21,7 +22,6 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
 
 from custom_components.check_my_bill.const import (
     CONF_CYCLE_DAY,
-    CONF_HEAT_CONTENT,
     CONF_IMPORT_STAT,
     CONF_METER,
     CONF_TARIFF,
@@ -36,11 +36,11 @@ from .test_coordinator import ORIGIN, hours, local, state
 METER = "sensor.test_gas_meter"
 UTILITY = "opower:test_gas_0000_energy_consumption"
 NOW = local(2026, 11, 10, 12, 30)
-HEAT_CONTENT = 1.05
 FT3_PER_HOUR = 10.0
-"""0.1 CCF, or 0.105 thm at the heat content above."""
+"""0.1 CCF, which is 0.1 thm."""
 THM_PER_HOUR = 0.104
 """The utility's data: in therms, though Opower labels it CCF."""
+KWH_PER_THM = EnergyConverter.convert(1, "thm", "kWh")
 TARIFF = [{"effective_from": "2020-01-01", "supply": 0.6, "delivery": 0.4, "fixed_monthly": 15.0}]
 
 # Oct 3 - Nov 3 crosses the end of DST: 745 hours.
@@ -86,7 +86,6 @@ async def _setup(hass: HomeAssistant, **data: Any) -> MockConfigEntry:
             CONF_IMPORT_STAT: METER,
             CONF_UTILITY_IMPORT_STAT: UTILITY,
             CONF_UTILITY_UNIT: "thm",
-            CONF_HEAT_CONTENT: HEAT_CONTENT,
             CONF_CYCLE_DAY: 3,
             **data,
         },
@@ -114,7 +113,7 @@ async def test_therms_from_cubic_feet_and_utility_therms(hass: HomeAssistant) ->
 
     # Whole days only: Nov 3 - Nov 9.
     cycle_import = state(hass, entry, "cycle_import")
-    assert float(cycle_import.state) == pytest.approx(7 * 24 * 0.105, rel=1e-6)
+    assert float(cycle_import.state) == pytest.approx(7 * 24 * 0.1, rel=1e-6)
     assert cycle_import.attributes["unit_of_measurement"] == "thm"
     assert cycle_import.attributes["device_class"] == "energy"
 
@@ -122,7 +121,7 @@ async def test_therms_from_cubic_feet_and_utility_therms(hass: HomeAssistant) ->
     last = coordinator.data.last_closed
     assert last is not None
     assert last.status == "ok"
-    assert last.metered == pytest.approx(LAST_CYCLE_HOURS * 0.105, rel=1e-6)
+    assert last.metered == pytest.approx(LAST_CYCLE_HOURS * 0.1, rel=1e-6)
     assert last.utility == pytest.approx(LAST_CYCLE_HOURS * THM_PER_HOUR, rel=1e-6)
     expected = state(hass, entry, "last_cycle_expected_cost")
     assert float(expected.state) == pytest.approx(LAST_CYCLE_HOURS * THM_PER_HOUR + 15, abs=0.01)
@@ -138,7 +137,7 @@ async def test_billed_by_volume(hass: HomeAssistant) -> None:
 
     last = entry.runtime_data.data.last_closed
     assert last is not None
-    assert last.utility == pytest.approx(LAST_CYCLE_HOURS * THM_PER_HOUR / HEAT_CONTENT, rel=1e-6)
+    assert last.utility == pytest.approx(LAST_CYCLE_HOURS * THM_PER_HOUR, rel=1e-6)
 
 
 @pytest.mark.usefixtures("seeded")
@@ -147,15 +146,15 @@ async def test_changing_the_billing_unit_converts_history(hass: HomeAssistant) -
     before = entry.runtime_data.data.history
     assert all(r.final for r in before)
 
-    hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_UNIT: "CCF"})
+    hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_UNIT: "kWh"})
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
 
     after = entry.runtime_data.data.history
     assert [r.start for r in after] == [r.start for r in before]
     for old, new in zip(before, after, strict=True):
-        assert new.metered == pytest.approx(old.metered / HEAT_CONTENT, rel=1e-6)
-        assert new.utility == pytest.approx(old.utility / HEAT_CONTENT, rel=1e-6)
+        assert new.metered == pytest.approx(old.metered * KWH_PER_THM, rel=1e-6)
+        assert new.utility == pytest.approx(old.utility * KWH_PER_THM, rel=1e-6)
 
 
 async def test_entry_without_a_meter_is_electric(

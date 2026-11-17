@@ -37,7 +37,7 @@
       },
       "units": {
         "title": "Units",
-        "description": "Quantities, rates and sensors all use the unit your gas bill charges by.",
+        "description": "Quantities, rates and sensors all use the unit your gas bill charges by. A CCF counts as one therm.",
         "data": {
           "unit": "Billing unit",
           "utility_unit": "Utility data unit"
@@ -45,16 +45,6 @@
         "data_description": {
           "unit": "What unit does your gas bill charge by?",
           "utility_unit": "The unit of your utility's usage data. Opower labels all gas data CCF; this was read from your account, so correct it only if your bill disagrees."
-        }
-      },
-      "heat_content": {
-        "title": "Heat content",
-        "description": "Your meter and your bill use different kinds of unit, one a volume and the other an energy. The heat content converts between them.",
-        "data": {
-          "heat_content": "Heat content"
-        },
-        "data_description": {
-          "heat_content": "Therms per CCF. Copy the \"therm factor\" or \"BTU factor\" from a recent bill; it changes a little each month."
         }
       },
       "cycle": {
@@ -158,12 +148,10 @@
         "title": "Settings",
         "data": {
           "tolerance": "Tolerance",
-          "export_mode": "Export billing",
-          "heat_content": "Heat content"
+          "export_mode": "Export billing"
         },
         "data_description": {
-          "tolerance": "How far the metered and utility quantities can differ before a cycle is flagged.",
-          "heat_content": "Therms per CCF, from your latest bill. A new value reprices cycles that are still open."
+          "tolerance": "How far the metered and utility quantities can differ before a cycle is flagged."
         }
       }
     },

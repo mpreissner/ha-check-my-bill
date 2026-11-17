@@ -25,7 +25,6 @@ from .const import (
     CONF_CYCLE_START_ENTITY,
     CONF_EXPORT_MODE,
     CONF_EXPORT_STAT,
-    CONF_HEAT_CONTENT,
     CONF_IMPORT_STAT,
     CONF_METER,
     CONF_TARIFF,
@@ -106,8 +105,6 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         self.meter = Meter(data.get(CONF_METER, Meter.ELECTRIC))
         self.unit: str = data.get(CONF_UNIT, KWH)
         self.utility_unit: str | None = data.get(CONF_UTILITY_UNIT)
-        heat_content = options.get(CONF_HEAT_CONTENT, data.get(CONF_HEAT_CONTENT))
-        self.heat_content = None if heat_content is None else float(heat_content)
         self.ids = StatIds(
             imports=data[CONF_IMPORT_STAT],
             exports=data.get(CONF_EXPORT_STAT),
@@ -240,7 +237,7 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         return data
 
     def _scale(self, from_unit: str | None) -> float | None:
-        return scale(from_unit, self.unit, self.heat_content, volume=VOLUME, energy=ENERGY)
+        return scale(from_unit, self.unit, volume=VOLUME, energy=ENERGY)
 
     async def _update_scales(self, state: StoredState) -> None:
         """Scale each statistic from its own unit to the billing unit (gas.md §3.1).
