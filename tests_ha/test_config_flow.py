@@ -617,8 +617,9 @@ async def test_gas_statistic_rejected_for_electric(hass: HomeAssistant) -> None:
     assert result["errors"] == {"base": "not_an_electric_statistic"}
 
 
-async def test_electric_statistic_rejected_for_gas(hass: HomeAssistant) -> None:
-    await _meter_stat(hass, IMPORT, "W")
+@pytest.mark.parametrize("unit", ["kWh", "W"])
+async def test_electric_statistic_rejected_for_gas(hass: HomeAssistant, unit: str) -> None:
+    await _meter_stat(hass, IMPORT, unit)
     result = await _gas_flow(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_IMPORT_STAT: IMPORT}

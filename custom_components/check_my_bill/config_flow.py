@@ -55,7 +55,7 @@ from .core.tariff import ExportMode, RateSpec, TariffVersion
 from .core.units import CCF, KWH, THERM, Meter
 from .discovery import OpowerAccount, gas_statistics, grid_statistics, opower_accounts
 from .opower_bills import account_unit
-from .stats import ENERGY, VOLUME
+from .stats import VOLUME
 
 TITLE = "Check My Bill"
 GAS_TITLE = "Check My Bill \u2013 Gas"
@@ -97,7 +97,7 @@ def _money(unit: str) -> NumberSelector:
     )
 
 
-GAS_UNITS = (THERM, CCF, "m³", KWH)
+GAS_UNITS = (THERM, CCF, "m³")
 """Billing units offered for gas, the default first."""
 _METER = SelectSelector(
     SelectSelectorConfig(
@@ -110,7 +110,6 @@ _UNIT_LABELS = {
     THERM: "Therms (thm)",
     CCF: "Hundred cubic feet (CCF)",
     "m³": "Cubic meters (m³)",
-    KWH: "Kilowatt-hours (kWh)",
 }
 _GAS_UNIT = SelectSelector(
     SelectSelectorConfig(
@@ -214,11 +213,7 @@ async def _stat_units(hass: Any, statistic_ids: list[str | None]) -> dict[str, s
 
 
 def _is_gas_unit(unit: str | None) -> bool:
-    return unit is not None and (unit in VOLUME.units or unit in ENERGY.units)
-
-
-def _is_gas_only_unit(unit: str | None) -> bool:
-    """A unit no electric meter reports in: a volume, or therms."""
+    """A unit gas is measured in: a volume, or therms."""
     return unit is not None and (unit in VOLUME.units or unit == THERM)
 
 
@@ -229,7 +224,7 @@ async def _gas_error(hass: Any, statistic_id: str) -> str | None:
 
 async def _electric_error(hass: Any, statistic_ids: list[str | None]) -> str | None:
     units = await _stat_units(hass, statistic_ids)
-    if any(_is_gas_only_unit(u) for u in units.values()):
+    if any(_is_gas_unit(u) for u in units.values()):
         return "not_an_electric_statistic"
     return None
 

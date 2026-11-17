@@ -75,8 +75,8 @@ For **gas**:
 
 - **user step**: one statistic, HA's gas consumption. There is no export statistic.
   - It is pre-filled from the Energy dashboard's first `gas` source (`stat_energy_from`).
-  - Statistics with a volume unit (`m³`, `ft³`, `CCF`, `MCF`, `L`, `gal`) or an energy
-    unit (`kWh`, `MJ`, `GJ`, `thm`, …) are accepted. Anything else is rejected with
+  - Statistics with a volume unit (`m³`, `ft³`, `CCF`, `MCF`, `L`, `gal`) or in therms
+    (`thm`) are accepted. Gas is not measured in kWh, MJ or GJ, so those are rejected. Anything else is rejected with
     `not_a_gas_statistic`.
 - **utility step**: lists Opower **gas** accounts. These are statistics whose prefix
   holds `_gas_`, and their date sensors end in `_gas_start_date` and `_gas_end_date`. The
@@ -84,7 +84,7 @@ For **gas**:
   account number are not confused.
 - **units step** (new, gas only, always shown):
   - **Billing unit**: "What unit does your gas bill charge by?" The choices are therms
-    (`thm`, the default), CCF, m³ and kWh. The answer becomes the entry's unit
+    (`thm`, the default), CCF and m³. The answer becomes the entry's unit
     (`CONF_UNIT`). All quantities, rates, tiers and sensors use it.
   - **Utility data unit**: the unit of the utility statistic, when there is one. The
     Opower integration labels every gas statistic `CCF`, even for utilities whose data
@@ -117,12 +117,11 @@ Entries without `CONF_METER` are electric with unit `kWh`. No migration step and
 
 Every statistic is converted to the billing unit by a fixed factor:
 
-- Same class (volume to volume, energy to energy): HA's `VolumeConverter` or
-  `EnergyConverter` factor. Examples: `m³` to `CCF` is 0.353147; `kWh` to `thm` is
-  0.034121.
-- Volume to energy: 1 CCF = 1 thm, as most US utilities bill. There is no heat-content
-  setting. Other units go through the converters on each side. For example, `m³` to `kWh` is
-  `m³ → CCF → thm → kWh`.
+- Volume to volume: HA's `VolumeConverter` factor. For example, `m³` to `CCF` is
+  0.353147.
+- Volume to therms: 1 CCF = 1 thm, as most US utilities bill. There is no heat-content
+  setting. For example, `m³` to `thm` is `m³ → CCF → thm`. (HA files therms under its
+  energy converter, which is the only reason that converter is involved.)
 - Opower gas statistics use the utility data unit from §2.1, not the statistic's
   metadata.
 - For example, with HA's meter in `ft³`, Opower data in CCF, and billing in therms, the HA
@@ -161,8 +160,7 @@ billing unit too.
 ## 5. Sensors
 
 - `cycle_import`:
-  - device class `GAS` when the unit is a volume unit, or `ENERGY` when it is `kWh`,
-    `MJ`, `GJ`, …;
+  - device class `GAS` when the unit is a volume unit;
   - unit is the entry's unit;
   - state class `total_increasing` as today.
   - **Exception:** HA's `GAS` device class does not accept `thm`. A therm entry uses
@@ -206,8 +204,8 @@ Refactor (§1.1):
 - **`tests_ha`.** The store migration renames keys in a stored state from an earlier beta.
 
 `tests/test_units.py`:
-- Same-class scales (`m³` to `CCF`, `kWh` to `thm`).
-- Cross-class scales at 1 CCF = 1 thm.
+- Volume scales (`m³` to `CCF`).
+- Volume to therms at 1 CCF = 1 thm.
 - `None` for an unsupported pair.
 
 `tests/test_discovery.py` (or the existing discovery tests):

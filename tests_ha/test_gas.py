@@ -14,7 +14,7 @@ from homeassistant.components.recorder.statistics import (
 )
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.util.unit_conversion import EnergyConverter
+from homeassistant.util.unit_conversion import VolumeConverter
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
@@ -40,7 +40,8 @@ FT3_PER_HOUR = 10.0
 """0.1 CCF, which is 0.1 thm."""
 THM_PER_HOUR = 0.104
 """The utility's data: in therms, though Opower labels it CCF."""
-KWH_PER_THM = EnergyConverter.convert(1, "thm", "kWh")
+M3_PER_THM = VolumeConverter.convert(1, "CCF", "m³")
+"""1 thm = 1 CCF."""
 TARIFF = [{"effective_from": "2020-01-01", "supply": 0.6, "delivery": 0.4, "fixed_monthly": 15.0}]
 
 # Oct 3 - Nov 3 crosses the end of DST: 745 hours.
@@ -146,15 +147,15 @@ async def test_changing_the_billing_unit_converts_history(hass: HomeAssistant) -
     before = entry.runtime_data.data.history
     assert all(r.final for r in before)
 
-    hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_UNIT: "kWh"})
+    hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_UNIT: "m³"})
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
 
     after = entry.runtime_data.data.history
     assert [r.start for r in after] == [r.start for r in before]
     for old, new in zip(before, after, strict=True):
-        assert new.metered == pytest.approx(old.metered * KWH_PER_THM, rel=1e-6)
-        assert new.utility == pytest.approx(old.utility * KWH_PER_THM, rel=1e-6)
+        assert new.metered == pytest.approx(old.metered * M3_PER_THM, rel=1e-6)
+        assert new.utility == pytest.approx(old.utility * M3_PER_THM, rel=1e-6)
 
 
 async def test_entry_without_a_meter_is_electric(

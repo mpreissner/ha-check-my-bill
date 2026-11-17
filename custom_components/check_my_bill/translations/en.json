@@ -21,7 +21,7 @@
           "import_stat": "Gas consumption"
         },
         "data_description": {
-          "import_stat": "Cumulative gas use, in a volume (ft³, m³, CCF) or an energy unit (kWh, MJ, thm)."
+          "import_stat": "Cumulative gas use, in a volume (ft³, m³, CCF) or therms."
         }
       },
       "utility": {
@@ -100,7 +100,7 @@
       "rates_both": "Enter both the supply and the delivery rate.",
       "invalid_tariff": "The rates could not be read. Check the values and their format.",
       "import_required": "Choose the grid import statistic.",
-      "not_a_gas_statistic": "This statistic is not in a gas unit (a volume such as ft³, m³ or CCF, or an energy such as kWh or thm).",
+      "not_a_gas_statistic": "This statistic is not in a gas unit: a volume such as ft³, m³ or CCF, or therms.",
       "not_an_electric_statistic": "This statistic is in a gas unit. To check gas, choose the gas meter instead."
     },
     "abort": {
