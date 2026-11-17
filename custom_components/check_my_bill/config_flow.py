@@ -384,7 +384,14 @@ class CheckMyBillOptionsFlow(OptionsFlow):
         return self.async_create_entry(data={**self.config_entry.options, **changes})
 
     def _versions(self) -> list[dict[str, Any]]:
-        return list(self.config_entry.options.get(CONF_TARIFF) or [])
+        """Stored versions in the current key format; legacy keys are rewritten on save."""
+        versions = []
+        for raw in self.config_entry.options.get(CONF_TARIFF) or []:
+            try:
+                versions.append(version_to_dict(version_from_dict(raw)))
+            except AttributeError, KeyError, TypeError, ValueError:
+                versions.append(raw)
+        return versions
 
     def _export_mode(self) -> str:
         return self.config_entry.options.get(CONF_EXPORT_MODE) or ExportMode.NONE.value

@@ -1,4 +1,4 @@
-"""Compare the utility's metered kWh against what HA measured.
+"""Compare the utility's metered quantity against what HA measured.
 
 A meter that nets export against import within sub-hourly intervals reads somewhere
 between HA's hourly-netted import and its gross import, so with export the check is a
@@ -12,12 +12,12 @@ from .compute import CycleTotals
 from .tariff import ExportMode
 
 DEFAULT_TOLERANCE = 0.02
-CALIBRATION_MAX_EXPORT_KWH = 0.01
+CALIBRATION_MAX_EXPORT = 0.01
 """A cycle with less export than this counts as export-free for the calibration ratio."""
 
 
 class Status(StrEnum):
-    """Outcome of comparing utility kWh with HA's measurement."""
+    """Outcome of comparing the utility quantity with HA's measurement."""
 
     OK = "ok"
     WARN = "warn"
@@ -28,7 +28,7 @@ class Status(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Band:
-    """An inclusive kWh range."""
+    """An inclusive quantity range."""
 
     low: float
     high: float
@@ -47,13 +47,13 @@ class Band:
 
 
 def band(totals: CycleTotals, mode: ExportMode, tolerance: float) -> Band:
-    """The range the utility's kWh should fall in."""
-    export = totals.export_kwh or 0.0
+    """The range the utility's quantity should fall in."""
+    export = totals.export or 0.0
     if mode is ExportMode.NET_METERING:
-        center = max(0.0, totals.metered_kwh - export)
+        center = max(0.0, totals.metered - export)
         return Band(center * (1 - tolerance), center * (1 + tolerance))
-    low = totals.netted_kwh if totals.netted_kwh is not None else totals.metered_kwh
-    return Band(low * (1 - tolerance), totals.metered_kwh * (1 + tolerance))
+    low = totals.netted if totals.netted is not None else totals.metered
+    return Band(low * (1 - tolerance), totals.metered * (1 + tolerance))
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +62,7 @@ class Reconciliation:
 
     status: Status
     band: Band | None
-    utility_kwh: float | None
+    utility: float | None
     deviation_pct: float | None
 
 
@@ -81,7 +81,7 @@ def reconcile(
     """
     if not 0 <= tolerance < 1:
         raise ValueError(f"tolerance must be in [0, 1), got {tolerance}")
-    if totals.utility_kwh is None:
+    if totals.utility is None:
         return Reconciliation(Status.NO_DATA, None, None, None)
 
     expected = band(totals, mode, tolerance)
@@ -92,9 +92,9 @@ def reconcile(
         complete = complete and totals.coverage.exports == 1.0
     if not complete:
         status = Status.NO_DATA if final else Status.IN_PROGRESS
-        return Reconciliation(status, expected, totals.utility_kwh, None)
+        return Reconciliation(status, expected, totals.utility, None)
 
-    value = totals.utility_kwh
+    value = totals.utility
     if expected.contains(value):
         status = Status.OK
     elif band(totals, mode, min(2 * tolerance, 0.99)).contains(value):
@@ -105,14 +105,14 @@ def reconcile(
 
 
 def calibration_ratio(totals: CycleTotals) -> float | None:
-    """utility kWh / HA kWh for an export-free cycle with complete data, else None.
+    """utility quantity / HA quantity for an export-free cycle with complete data, else None.
 
     A stable ratio away from 1.0 points at CT or meter calibration, not at the bill.
     """
-    if totals.utility_kwh is None or totals.metered_kwh <= 0:
+    if totals.utility is None or totals.metered <= 0:
         return None
     if totals.coverage.imports != 1.0 or totals.coverage.utility != 1.0:
         return None
-    if (totals.export_kwh or 0.0) > CALIBRATION_MAX_EXPORT_KWH:
+    if (totals.export or 0.0) > CALIBRATION_MAX_EXPORT:
         return None
-    return totals.utility_kwh / totals.metered_kwh
+    return totals.utility / totals.metered

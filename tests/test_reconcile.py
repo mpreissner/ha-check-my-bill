@@ -15,11 +15,11 @@ def make(
     coverage: Coverage = FULL,
 ) -> CycleTotals:
     return CycleTotals(
-        metered_kwh=metered,
-        export_kwh=export,
-        netted_kwh=netted,
-        utility_kwh=utility,
-        utility_export_kwh=None,
+        metered=metered,
+        export=export,
+        netted=netted,
+        utility=utility,
+        utility_export=None,
         coverage=coverage,
     )
 

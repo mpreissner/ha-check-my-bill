@@ -210,7 +210,7 @@ async def test_utility_rollover_then_finalizes(
     assert closed is not None
     assert closed.final
     assert closed.status == "ok"
-    assert closed.utility_kwh == pytest.approx(745 * UTILITY_PER_HOUR)
+    assert closed.utility == pytest.approx(745 * UTILITY_PER_HOUR)
 
 
 async def test_setup_retries_without_a_cycle(hass: HomeAssistant) -> None:
@@ -255,14 +255,14 @@ async def test_reconfigured_statistics_discard_history(
     entry = await setup_entry(hass, {CONF_CYCLE_DAY: 3})
     before = entry.runtime_data.data.history
     cycle_hours = len(hours(local(2026, 10, 3), local(2026, 11, 3)))  # 745: DST ends Nov 1
-    assert before[0].metered_kwh == pytest.approx(cycle_hours)
+    assert before[0].metered == pytest.approx(cycle_hours)
 
     await _reconfigure(
         hass, entry, {CONF_IMPORT_STAT: other, CONF_UTILITY_IMPORT_STAT: UTILITY, CONF_CYCLE_DAY: 3}
     )
     after = entry.runtime_data.data.history
     assert len(after) == len(before)
-    assert after[0].metered_kwh == pytest.approx(2 * cycle_hours)  # rebuilt from the new meter
+    assert after[0].metered == pytest.approx(2 * cycle_hours)  # rebuilt from the new meter
 
 
 async def test_reconfigured_cycle_keeps_history(

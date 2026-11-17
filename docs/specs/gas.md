@@ -41,13 +41,21 @@ its own refactor, with no behaviour change, so the gas work does not mix with a 
 | `CostBreakdown.billed_kwh` | `billed_quantity` |
 | `CostBasis.import_kwh`, `export_kwh` | `imports`, `exports` |
 | tariff tier `up_to_kwh` | `up_to` |
+| rider `per_kwh` | `per_unit` |
 | `EXPORT_THRESHOLD_KWH` (issues) | `EXPORT_THRESHOLD` |
+| `CALIBRATION_MAX_EXPORT_KWH` (reconcile) | `CALIBRATION_MAX_EXPORT` |
+| last-cycle sensor attributes `metered_kwh`, `utility_kwh` | `metered`, `utility` |
 | rate docstrings "$/kWh" | "per billing unit" |
 
 - **Storage.** `CycleRecord.from_dict`, `cost_from_dict` and the tariff serde read both
   the old and the new keys. They write only the new ones. Stored cycles and tariff
   options from earlier betas load unchanged and are rewritten on the next save. The
-  `Store` version is bumped, with a migration that renames the keys.
+  `Store` goes from version 1.1 to 1.2, with a migration that renames the keys. It is a
+  minor bump, so a downgrade still opens the store; the older code then recomputes the
+  records it cannot read. Tariff options are rewritten when the options flow saves them.
+- **Sensor attributes.** The last-cycle sensor's `metered_kwh` and `utility_kwh`
+  attributes become `metered` and `utility`. Templates that read the old names must be
+  updated; the release notes say so.
 - **WebSocket.** Records use the new keys: `metered`, `utility`, `bill.quantity`, and so
   on. The card is updated in the same change. It is the only client and ships with the
   integration, so there is no compatibility shim.

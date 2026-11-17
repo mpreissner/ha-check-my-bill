@@ -9,12 +9,12 @@ FULL = {
     "supply": {"default": 0.11, "seasonal": [{"months": [6, 7, 8, 9], "rate": 0.13}]},
     "delivery": 0.05,
     "tiers": [
-        {"up_to_kwh": 500.0, "supply_rate": 0.10, "delivery_rate": None},
-        {"up_to_kwh": None, "supply_rate": None, "delivery_rate": None},
+        {"up_to": 500.0, "supply_rate": 0.10, "delivery_rate": None},
+        {"up_to": None, "supply_rate": None, "delivery_rate": None},
     ],
     "fixed_monthly": 8.0,
     "fixed_daily": 0.1,
-    "riders": [{"name": "EmPOWER", "per_kwh": 0.006}],
+    "riders": [{"name": "EmPOWER", "per_unit": 0.006}],
     "tax_pct": 2.0,
     "export_rate": 0.03,
 }
@@ -22,6 +22,19 @@ FULL = {
 
 def test_round_trip() -> None:
     assert version_to_dict(version_from_dict(FULL)) == FULL
+
+
+def test_legacy_kwh_keys_load_and_save_as_new() -> None:
+    legacy = {
+        **FULL,
+        "tiers": [
+            {"up_to_kwh": 500.0, "supply_rate": 0.10, "delivery_rate": None},
+            {"up_to_kwh": None, "supply_rate": None, "delivery_rate": None},
+        ],
+        "riders": [{"name": "EmPOWER", "per_kwh": 0.006}],
+    }
+    assert version_from_dict(legacy) == version_from_dict(FULL)
+    assert version_to_dict(version_from_dict(legacy)) == FULL
 
 
 def test_minimal_version_uses_defaults() -> None:
@@ -50,7 +63,7 @@ def test_tariff_from_options() -> None:
     "bad",
     [
         {**FULL, "supply": {"default": 0.1, "seasonal": [{"months": [13], "rate": 0.2}]}},
-        {**FULL, "tiers": [{"up_to_kwh": None}, {"up_to_kwh": 5.0}]},
+        {**FULL, "tiers": [{"up_to": None}, {"up_to": 5.0}]},
         {**FULL, "effective_from": "June"},
     ],
 )

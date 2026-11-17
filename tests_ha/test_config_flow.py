@@ -407,8 +407,8 @@ SEASONAL = {
     "effective_from": "2026-01-01",
     "supply": {"default": 0.11, "seasonal": [{"months": [6, 7, 8, 9], "rate": 0.13}]},
     "delivery": 0.07,
-    "tiers": [{"up_to_kwh": 500, "supply_rate": None, "delivery_rate": 0.05}],
-    "riders": [{"name": "EmPOWER", "per_kwh": 0.004}],
+    "tiers": [{"up_to": 500, "supply_rate": None, "delivery_rate": 0.05}],
+    "riders": [{"name": "EmPOWER", "per_unit": 0.004}],
     "fixed_monthly": 8.0,
 }
 

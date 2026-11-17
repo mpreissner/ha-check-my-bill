@@ -33,7 +33,7 @@ class Source(StrEnum):
 class BilledAmounts:
     """What the utility billed for a cycle, as Opower reports it."""
 
-    kwh: float | None
+    quantity: float | None
     cost: float | None
     """Opower's provided cost; depending on the utility it may leave out taxes and fees."""
 
@@ -47,11 +47,11 @@ class CycleRecord:
     source: Source
     final: bool
     """A closed cycle past the grace period; it is no longer recomputed."""
-    metered_kwh: float
-    export_kwh: float | None
-    netted_kwh: float | None
-    utility_kwh: float | None
-    utility_export_kwh: float | None
+    metered: float
+    export: float | None
+    netted: float | None
+    utility: float | None
+    utility_export: float | None
     coverage: Coverage
     status: Status
     band: Band | None
@@ -60,7 +60,7 @@ class CycleRecord:
     cost: CostBreakdown | None
     """Expected charges; None without a tariff. To date for the open cycle."""
     cost_basis: str | None
-    """``"utility"`` or ``"meter"``: which kWh the cost was computed from."""
+    """``"utility"`` or ``"meter"``: which quantities the cost was computed from."""
     bill: BilledAmounts | None = None
     """The utility's bill for this period, when Opower reported one."""
 
@@ -78,11 +78,11 @@ class CycleRecord:
     def totals(self) -> CycleTotals:
         """The totals this record was built from."""
         return CycleTotals(
-            metered_kwh=self.metered_kwh,
-            export_kwh=self.export_kwh,
-            netted_kwh=self.netted_kwh,
-            utility_kwh=self.utility_kwh,
-            utility_export_kwh=self.utility_export_kwh,
+            metered=self.metered,
+            export=self.export,
+            netted=self.netted,
+            utility=self.utility,
+            utility_export=self.utility_export,
             coverage=self.coverage,
         )
 
@@ -93,11 +93,11 @@ class CycleRecord:
             "end": self.end.isoformat(),
             "source": self.source.value,
             "final": self.final,
-            "metered_kwh": self.metered_kwh,
-            "export_kwh": self.export_kwh,
-            "netted_kwh": self.netted_kwh,
-            "utility_kwh": self.utility_kwh,
-            "utility_export_kwh": self.utility_export_kwh,
+            "metered": self.metered,
+            "export": self.export,
+            "netted": self.netted,
+            "utility": self.utility,
+            "utility_export": self.utility_export,
             "coverage": {
                 "import": self.coverage.imports,
                 "export": self.coverage.exports,
@@ -110,12 +110,15 @@ class CycleRecord:
             "calibration_ratio": self.calibration_ratio,
             "expected_cost": None if self.cost is None else cost_to_dict(self.cost),
             "cost_basis": self.cost_basis,
-            "bill": None if self.bill is None else {"kwh": self.bill.kwh, "cost": self.bill.cost},
+            "bill": None
+            if self.bill is None
+            else {"quantity": self.bill.quantity, "cost": self.bill.cost},
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CycleRecord:
-        """The inverse of :meth:`to_dict`."""
+        """The inverse of :meth:`to_dict`. Also reads records saved with legacy keys."""
+        data = upgrade_record_dict(data)
         cov = data["coverage"]
         band = data.get("band")
         expected = data.get("expected_cost")
@@ -125,11 +128,11 @@ class CycleRecord:
             end=date.fromisoformat(data["end"]),
             source=Source(data["source"]),
             final=bool(data["final"]),
-            metered_kwh=float(data["metered_kwh"]),
-            export_kwh=data.get("export_kwh"),
-            netted_kwh=data.get("netted_kwh"),
-            utility_kwh=data.get("utility_kwh"),
-            utility_export_kwh=data.get("utility_export_kwh"),
+            metered=float(data["metered"]),
+            export=data.get("export"),
+            netted=data.get("netted"),
+            utility=data.get("utility"),
+            utility_export=data.get("utility_export"),
             coverage=Coverage(
                 imports=float(cov["import"]),
                 exports=cov.get("export"),
@@ -142,8 +145,41 @@ class CycleRecord:
             calibration_ratio=data.get("calibration_ratio"),
             cost=None if expected is None else _cost_from_dict(expected),
             cost_basis=data.get("cost_basis"),
-            bill=None if billed is None else BilledAmounts(billed.get("kwh"), billed.get("cost")),
+            bill=None
+            if billed is None
+            else BilledAmounts(billed.get("quantity"), billed.get("cost")),
         )
+
+
+_LEGACY_RECORD_KEYS = {
+    "metered_kwh": "metered",
+    "export_kwh": "export",
+    "netted_kwh": "netted",
+    "utility_kwh": "utility",
+    "utility_export_kwh": "utility_export",
+}
+
+
+def _renamed(data: dict[str, Any], keys: dict[str, str]) -> dict[str, Any]:
+    """``data`` with old keys renamed; a new key already present wins."""
+    out = {k: v for k, v in data.items() if k not in keys}
+    for old, new in keys.items():
+        if old in data and new not in out:
+            out[new] = data[old]
+    return out
+
+
+def upgrade_record_dict(data: dict[str, Any]) -> dict[str, Any]:
+    """A stored record dict with the kWh-named keys of 0.1.0b3 and earlier renamed.
+
+    Returns a new dict; ``data`` is not changed. Current dicts come back equal.
+    """
+    out = _renamed(data, _LEGACY_RECORD_KEYS)
+    if isinstance(bill := out.get("bill"), dict):
+        out["bill"] = _renamed(bill, {"kwh": "quantity"})
+    if isinstance(expected := out.get("expected_cost"), dict):
+        out["expected_cost"] = _renamed(expected, {"billed_kwh": "billed_quantity"})
+    return out
 
 
 def _finite(value: float | None) -> float | None:
@@ -153,7 +189,7 @@ def _finite(value: float | None) -> float | None:
 def cost_to_dict(c: CostBreakdown) -> dict[str, float]:
     """A JSON-safe cost breakdown."""
     return {
-        "billed_kwh": c.billed_kwh,
+        "billed_quantity": c.billed_quantity,
         "supply": c.supply,
         "delivery": c.delivery,
         "riders": c.riders,
@@ -166,7 +202,7 @@ def cost_to_dict(c: CostBreakdown) -> dict[str, float]:
 
 def _cost_from_dict(data: dict[str, Any]) -> CostBreakdown:
     return CostBreakdown(
-        billed_kwh=float(data["billed_kwh"]),
+        billed_quantity=float(data["billed_quantity"]),
         supply=float(data["supply"]),
         delivery=float(data["delivery"]),
         riders=float(data["riders"]),
@@ -207,8 +243,8 @@ def build_record(
                 tariff,
                 cycle.start,
                 end,
-                basis.import_kwh,
-                basis.export_kwh,
+                basis.imports,
+                basis.exports,
                 period_days=cycle.days,
             )
             basis_source = basis.source
@@ -218,11 +254,11 @@ def build_record(
         end=cycle.end,
         source=source,
         final=final,
-        metered_kwh=totals.metered_kwh,
-        export_kwh=totals.export_kwh,
-        netted_kwh=totals.netted_kwh,
-        utility_kwh=totals.utility_kwh,
-        utility_export_kwh=totals.utility_export_kwh,
+        metered=totals.metered,
+        export=totals.export,
+        netted=totals.netted,
+        utility=totals.utility,
+        utility_export=totals.utility_export,
         coverage=totals.coverage,
         status=result.status,
         band=result.band,

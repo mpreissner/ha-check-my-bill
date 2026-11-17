@@ -14,7 +14,7 @@ from .stats import StatIds
 
 EXPORT_DETECTED = "export_detected"
 MISSING_STATISTIC = "missing_statistic"
-EXPORT_THRESHOLD_KWH = 0.1
+EXPORT_THRESHOLD = 0.1
 """Utility-recorded export above this, in one cycle, raises the export issue."""
 
 
@@ -41,7 +41,7 @@ def utility_records_export(
     """The utility recorded export while the tariff says export is not compensated."""
     if export_mode is not ExportMode.NONE or ids.utility_exports is None:
         return False
-    return any((r.utility_export_kwh or 0.0) > EXPORT_THRESHOLD_KWH for r in records)
+    return any((r.utility_export or 0.0) > EXPORT_THRESHOLD for r in records)
 
 
 async def async_check(
