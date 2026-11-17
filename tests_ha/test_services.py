@@ -77,8 +77,8 @@ async def test_set_cycle_dates_moves_a_backfilled_cycle(
     assert edited.source == "user"
     assert not edited.estimated
     cycle_hours = len(hours(local(2026, 10, 5), local(2026, 11, 3)))
-    assert edited.metered_kwh == pytest.approx(cycle_hours)
-    assert edited.utility_kwh == pytest.approx(cycle_hours * UTILITY_PER_HOUR)
+    assert edited.metered == pytest.approx(cycle_hours)
+    assert edited.utility == pytest.approx(cycle_hours * UTILITY_PER_HOUR)
     assert _starts(entry) == ["2026-10-05", "2026-09-03", "2026-08-03"]
 
     last = state(hass, entry, "last_cycle_expected_cost")
@@ -181,7 +181,7 @@ async def test_recompute_reads_late_statistics(
     await _call(hass, "recompute", {"cycle_start": "2026-10-03"})
     newest, *older = entry.runtime_data.data.history
     assert newest.status == "ok"
-    assert newest.utility_kwh == pytest.approx(745 * UTILITY_PER_HOUR)  # DST ends Nov 1
+    assert newest.utility == pytest.approx(745 * UTILITY_PER_HOUR)  # DST ends Nov 1
     assert all(r.status == "no_data" for r in older)
 
     await _call(hass, "recompute", {})
@@ -208,9 +208,58 @@ async def test_options_change_reprices_history(
 
     after = entry.runtime_data.data.history[0]
     assert (after.source, after.final) == (before.source, before.final)
-    assert after.metered_kwh == before.metered_kwh
+    assert after.metered == before.metered
     assert after.status != "ok"
     assert after.cost is not None
     kwh = 745 * UTILITY_PER_HOUR
     assert after.cost.total == pytest.approx(kwh * 0.30 + 9, abs=0.01)
     assert before.cost.total == pytest.approx(kwh * 0.15 + 9, abs=0.01)
+
+
+async def test_store_from_earlier_beta_is_migrated(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, hass_storage: dict[str, Any]
+) -> None:
+    """A 1.1 store with kWh-named record keys loads and is rewritten as 1.2 (gas.md §1.1)."""
+    entry = await _backfilled(hass, freezer)
+    key = f"{DOMAIN}.{entry.entry_id}"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    renames = {
+        "metered": "metered_kwh",
+        "export": "export_kwh",
+        "netted": "netted_kwh",
+        "utility": "utility_kwh",
+        "utility_export": "utility_export_kwh",
+    }
+    legacy_cycles = []
+    for cycle in hass_storage[key]["data"]["cycles"]:
+        old = {renames.get(k, k): v for k, v in cycle.items()}
+        if old.get("expected_cost") is not None:
+            old["expected_cost"]["billed_kwh"] = old["expected_cost"].pop("billed_quantity")
+        legacy_cycles.append(old)
+    legacy_cycles[0]["metered_kwh"] = 123.0  # final cycles are not recomputed
+    hass_storage[key] = {
+        **hass_storage[key],
+        "version": 1,
+        "minor_version": 1,
+        "data": {**hass_storage[key]["data"], "cycles": legacy_cycles},
+    }
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    history = entry.runtime_data.data.history
+    assert _starts(entry) == ["2026-10-03", "2026-09-03", "2026-08-03"]
+    assert history[0].metered == 123.0
+    assert history[0].utility is not None
+    assert history[0].cost is not None
+
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    stored = hass_storage[key]
+    assert stored["minor_version"] == 2
+    first = stored["data"]["cycles"][0]
+    assert first["metered"] == 123.0
+    assert "billed_quantity" in first["expected_cost"]
+    assert not any(k.endswith("_kwh") for c in stored["data"]["cycles"] for k in c)

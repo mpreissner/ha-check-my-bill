@@ -120,24 +120,24 @@ async def test_replay_real_site(hass: HomeAssistant, freezer: FrozenDateTimeFact
     assert closed.source == "backfill"
     assert closed.final
     first, last = local(2026, 9, 19), local(2026, 10, 19)
-    assert closed.metered_kwh == pytest.approx(_total("sensor.test_grid_import", first, last))
-    assert closed.utility_kwh == pytest.approx(
+    assert closed.metered == pytest.approx(_total("sensor.test_grid_import", first, last))
+    assert closed.utility == pytest.approx(
         _total("opower:test_elec_0000_energy_consumption", first, last)
     )
     assert closed.coverage.imports == 1.0
-    assert closed.netted_kwh is not None
-    assert closed.netted_kwh < closed.metered_kwh < closed.utility_kwh
+    assert closed.netted is not None
+    assert closed.netted < closed.metered < closed.utility
     assert closed.status == "ok"
     assert closed.cost_basis == "utility"
     assert closed.cost is not None
-    assert closed.cost.total == pytest.approx(closed.utility_kwh * 0.18 + 8.0)
+    assert closed.cost.total == pytest.approx(closed.utility * 0.18 + 8.0)
 
     # The current cycle comes from the utility's dates, with Opower about two days behind.
     current = data.current
     assert (current.start.isoformat(), current.end.isoformat()) == ("2026-10-19", "2026-11-20")
     assert not current.estimated
     now_hour = utc(FIXTURE["taken_at"])
-    assert current.metered_kwh == pytest.approx(
+    assert current.metered == pytest.approx(
         _total("sensor.test_grid_import", local(2026, 10, 19), now_hour)
     )
     assert current.coverage.utility is not None
@@ -150,5 +150,5 @@ async def test_replay_real_site(hass: HomeAssistant, freezer: FrozenDateTimeFact
     whole = (local(2026, 11, 20) - local(2026, 10, 19)).total_seconds() / 3600
     assert data.projected_cost is not None
     assert data.projected_cost.total == pytest.approx(
-        current.metered_kwh * whole / elapsed * 0.18 + 8.0, rel=1e-6
+        current.metered * whole / elapsed * 0.18 + 8.0, rel=1e-6
     )

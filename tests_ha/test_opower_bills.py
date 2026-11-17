@@ -105,13 +105,13 @@ async def test_bills_replace_backfilled_cycles(
     newest = entry.runtime_data.data.history[0]
     assert not newest.estimated
     assert newest.bill is not None
-    assert (newest.bill.kwh, newest.bill.cost) == (640.0, 101.25)
+    assert (newest.bill.quantity, newest.bill.cost) == (640.0, 101.25)
     cycle_hours = len(hours(local(2026, 10, 6), local(2026, 11, 3)))
-    assert newest.metered_kwh == pytest.approx(cycle_hours)
-    assert newest.utility_kwh == pytest.approx(cycle_hours * UTILITY_PER_HOUR)
+    assert newest.metered == pytest.approx(cycle_hours)
+    assert newest.utility == pytest.approx(cycle_hours * UTILITY_PER_HOUR)
 
     stored = hass_storage[f"{DOMAIN}.{entry.entry_id}"]["data"]["cycles"][0]
-    assert stored["bill"] == {"kwh": 640.0, "cost": 101.25}
+    assert stored["bill"] == {"quantity": 640.0, "cost": 101.25}
 
     # Once a day, not on every hourly refresh.
     assert api.calls == 1

@@ -10,9 +10,9 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN, STORE_VERSION
+from .const import DOMAIN, STORE_MINOR_VERSION, STORE_VERSION
 from .core.cycles import Cycle
-from .core.record import CycleRecord, Source
+from .core.record import CycleRecord, Source, upgrade_record_dict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,11 +66,35 @@ class StoredState:
         return state
 
 
+def migrate(minor_version: int, data: dict[str, Any]) -> dict[str, Any]:
+    """Stored data from an earlier 1.x minor version, in the current shape."""
+    if minor_version < 2:
+        data = {
+            **data,
+            "cycles": [
+                upgrade_record_dict(raw) if isinstance(raw, dict) else raw
+                for raw in data.get("cycles", [])
+            ],
+        }
+    return data
+
+
+class _Store(Store[dict[str, Any]]):
+    async def _async_migrate_func(
+        self, old_major_version: int, old_minor_version: int, old_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        if old_major_version != STORE_VERSION:
+            raise NotImplementedError
+        return migrate(old_minor_version, old_data)
+
+
 class CycleStore:
     """The ``check_my_bill.<entry_id>`` store."""
 
     def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
-        self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry_id}")
+        self._store: Store[dict[str, Any]] = _Store(
+            hass, STORE_VERSION, f"{DOMAIN}.{entry_id}", minor_version=STORE_MINOR_VERSION
+        )
         self._saved: dict[str, Any] | None = None
 
     async def async_load(self) -> StoredState:

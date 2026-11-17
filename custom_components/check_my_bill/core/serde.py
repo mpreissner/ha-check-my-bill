@@ -6,10 +6,13 @@ is optional)::
     {"effective_from": "2026-06-01",
      "supply": 0.11 | {"default": 0.11, "seasonal": [{"months": [6, 7, 8, 9], "rate": 0.13}]},
      "delivery": <same shape as supply>,
-     "tiers": [{"up_to_kwh": 500, "supply_rate": 0.10, "delivery_rate": null}],
+     "tiers": [{"up_to": 500, "supply_rate": 0.10, "delivery_rate": null}],
      "fixed_monthly": 8.0, "fixed_daily": 0.0,
-     "riders": [{"name": "EmPOWER", "per_kwh": 0.006}],
+     "riders": [{"name": "EmPOWER", "per_unit": 0.006}],
      "tax_pct": 2.0, "export_rate": 0.0}
+
+Rates and tier limits are in the entry's billing unit. ``up_to`` and ``per_unit`` were
+``up_to_kwh`` and ``per_kwh`` up to 0.1.0b3; both spellings are read, the new ones written.
 
 ``export_mode`` is a tariff-level option stored next to the version list.
 """
@@ -51,7 +54,7 @@ def version_from_dict(data: dict[str, Any]) -> TariffVersion:
         delivery=_rate_from(data["delivery"]),
         tiers=tuple(
             Tier(
-                _optional_float(t.get("up_to_kwh")),
+                _optional_float(t.get("up_to", t.get("up_to_kwh"))),
                 _optional_float(t.get("supply_rate")),
                 _optional_float(t.get("delivery_rate")),
             )
@@ -59,7 +62,10 @@ def version_from_dict(data: dict[str, Any]) -> TariffVersion:
         ),
         fixed_monthly=float(data.get("fixed_monthly", 0.0)),
         fixed_daily=float(data.get("fixed_daily", 0.0)),
-        riders=tuple(Rider(str(r["name"]), float(r["per_kwh"])) for r in data.get("riders", ())),
+        riders=tuple(
+            Rider(str(r["name"]), float(r["per_unit"] if "per_unit" in r else r["per_kwh"]))
+            for r in data.get("riders", ())
+        ),
         tax_pct=float(data.get("tax_pct", 0.0)),
         export_rate=float(data.get("export_rate", 0.0)),
     )
@@ -73,7 +79,7 @@ def version_to_dict(version: TariffVersion) -> dict[str, Any]:
         "delivery": _rate_to(version.delivery),
         "tiers": [
             {
-                "up_to_kwh": t.up_to_kwh,
+                "up_to": t.up_to,
                 "supply_rate": t.supply_rate,
                 "delivery_rate": t.delivery_rate,
             }
@@ -81,7 +87,7 @@ def version_to_dict(version: TariffVersion) -> dict[str, Any]:
         ],
         "fixed_monthly": version.fixed_monthly,
         "fixed_daily": version.fixed_daily,
-        "riders": [{"name": r.name, "per_kwh": r.per_kwh} for r in version.riders],
+        "riders": [{"name": r.name, "per_unit": r.per_unit} for r in version.riders],
         "tax_pct": version.tax_pct,
         "export_rate": version.export_rate,
     }

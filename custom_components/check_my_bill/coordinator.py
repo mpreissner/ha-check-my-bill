@@ -286,10 +286,10 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         total_hours = (end - start).total_seconds() / 3600
         elapsed = max(0.0, (min(until.astimezone(UTC), end) - start).total_seconds() / 3600)
         elapsed *= totals.coverage.imports
-        projected_import = project(totals.metered_kwh, elapsed, total_hours)
+        projected_import = project(totals.metered, elapsed, total_hours)
         if projected_import is None:
             return record, None
-        projected_export = project(totals.export_kwh or 0.0, elapsed, total_hours) or 0.0
+        projected_export = project(totals.export or 0.0, elapsed, total_hours) or 0.0
         projected = cost(
             self.tariff,
             current.start,

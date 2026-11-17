@@ -1,7 +1,7 @@
 """Tariff model and expected-cost evaluation.
 
 Costs are evaluated per cycle. A cycle that spans a rate change or a season boundary is
-split into segments by day, and the cycle's kWh, tier blocks and monthly fixed charge are
+split into segments by day, and the cycle quantity, tier blocks and monthly fixed charge are
 prorated across segments by their share of days. That matches how utilities prorate.
 """
 
@@ -17,14 +17,14 @@ class ExportMode(StrEnum):
     NONE = "none"
     """Export earns nothing and does not offset import."""
     NET_METERING = "net_metering"
-    """Billed kWh is import minus export for the cycle, floored at zero."""
+    """Billed quantity is import minus export for the cycle, floored at zero."""
     SEPARATE_RATE = "separate_rate"
     """Import is billed in full and export earns a credit at its own rate."""
 
 
 @dataclass(frozen=True, slots=True)
 class SeasonalRate:
-    """A $/kWh rate that applies in the listed months (1-12)."""
+    """A rate per billing unit that applies in the listed months (1-12)."""
 
     months: frozenset[int]
     rate: float
@@ -32,7 +32,7 @@ class SeasonalRate:
 
 @dataclass(frozen=True, slots=True)
 class RateSpec:
-    """A $/kWh rate, optionally overridden for some months."""
+    """A rate per billing unit, optionally overridden for some months."""
 
     default: float
     seasonal: tuple[SeasonalRate, ...] = ()
@@ -58,20 +58,20 @@ class RateSpec:
 class Tier:
     """A usage block. Rates left as None fall back to the version's base rates.
 
-    ``up_to_kwh`` is the cumulative cycle kWh where the block ends; None means unbounded.
+    ``up_to`` is the cumulative cycle quantity where the block ends; None means unbounded.
     """
 
-    up_to_kwh: float | None
+    up_to: float | None
     supply_rate: float | None = None
     delivery_rate: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class Rider:
-    """A named per-kWh surcharge."""
+    """A named surcharge per billing unit."""
 
     name: str
-    per_kwh: float
+    per_unit: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,13 +91,13 @@ class TariffVersion:
     def __post_init__(self) -> None:
         last = 0.0
         for i, tier in enumerate(self.tiers):
-            if tier.up_to_kwh is None:
+            if tier.up_to is None:
                 if i != len(self.tiers) - 1:
                     raise ValueError("only the last tier may be unbounded")
                 continue
-            if tier.up_to_kwh <= last:
+            if tier.up_to <= last:
                 raise ValueError("tier limits must be positive and strictly increasing")
-            last = tier.up_to_kwh
+            last = tier.up_to
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +134,7 @@ class Tariff:
 class CostBreakdown:
     """Expected charges for a period, in the user's currency."""
 
-    billed_kwh: float
+    billed_quantity: float
     supply: float
     delivery: float
     riders: float
@@ -153,29 +153,29 @@ class CostBreakdown:
         return self.subtotal + self.tax - self.export_credit
 
 
-def billed_kwh(mode: ExportMode, import_kwh: float, export_kwh: float) -> float:
-    """The kWh the utility charges energy rates on."""
+def billed_quantity(mode: ExportMode, imports: float, exports: float) -> float:
+    """The quantity the utility charges energy rates on."""
     if mode is ExportMode.NET_METERING:
-        return max(0.0, import_kwh - export_kwh)
-    return import_kwh
+        return max(0.0, imports - exports)
+    return imports
 
 
 def _energy_charges(
-    version: TariffVersion, month: int, kwh: float, share: float
+    version: TariffVersion, month: int, quantity: float, share: float
 ) -> tuple[float, float]:
-    """Supply and delivery charges for ``kwh`` with tier blocks scaled by ``share``."""
+    """Supply and delivery charges for ``quantity`` with tier blocks scaled by ``share``."""
     base_supply = version.supply.rate_for(month)
     base_delivery = version.delivery.rate_for(month)
     supply = delivery = 0.0
-    remaining = kwh
+    remaining = quantity
     floor = 0.0
     for tier in version.tiers:
         if remaining <= 0:
             break
-        if tier.up_to_kwh is None:
+        if tier.up_to is None:
             amount = remaining
         else:
-            cap = tier.up_to_kwh * share
+            cap = tier.up_to * share
             amount = min(remaining, cap - floor)
             floor = cap
         supply += amount * (base_supply if tier.supply_rate is None else tier.supply_rate)
@@ -191,11 +191,11 @@ def cost(
     tariff: Tariff,
     start: date,
     end: date,
-    import_kwh: float,
-    export_kwh: float = 0.0,
+    imports: float,
+    exports: float = 0.0,
     period_days: int | None = None,
 ) -> CostBreakdown:
-    """Expected charges for ``[start, end)`` given the kWh used in that range.
+    """Expected charges for ``[start, end)`` given the quantity used in that range.
 
     ``period_days`` is the length of the full billing cycle. Pass it when ``[start, end)``
     is the cycle so far, so the monthly fixed charge is prorated to date rather than
@@ -209,7 +209,7 @@ def cost(
     if period_days < days:
         raise ValueError("period_days cannot be shorter than the range")
 
-    kwh = billed_kwh(tariff.export_mode, import_kwh, export_kwh)
+    quantity = billed_quantity(tariff.export_mode, imports, exports)
 
     segments: Counter[tuple[TariffVersion, int]] = Counter()
     for offset in range(days):
@@ -219,9 +219,9 @@ def cost(
     supply = delivery = riders = fixed = tax = credit = 0.0
     for (version, month), seg_days in segments.items():
         share = seg_days / days
-        seg_kwh = kwh * share
-        seg_supply, seg_delivery = _energy_charges(version, month, seg_kwh, share)
-        seg_riders = seg_kwh * sum(r.per_kwh for r in version.riders)
+        seg_quantity = quantity * share
+        seg_supply, seg_delivery = _energy_charges(version, month, seg_quantity, share)
+        seg_riders = seg_quantity * sum(r.per_unit for r in version.riders)
         seg_fixed = version.fixed_monthly * seg_days / period_days + version.fixed_daily * seg_days
         supply += seg_supply
         delivery += seg_delivery
@@ -229,10 +229,10 @@ def cost(
         fixed += seg_fixed
         tax += (seg_supply + seg_delivery + seg_riders + seg_fixed) * version.tax_pct / 100
         if tariff.export_mode is ExportMode.SEPARATE_RATE:
-            credit += export_kwh * share * version.export_rate
+            credit += exports * share * version.export_rate
 
     return CostBreakdown(
-        billed_kwh=kwh,
+        billed_quantity=quantity,
         supply=supply,
         delivery=delivery,
         riders=riders,

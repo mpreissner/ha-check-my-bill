@@ -17,7 +17,7 @@ class UtilityBill:
 
     start: date
     end: date
-    kwh: float | None
+    quantity: float | None
     cost: float | None
 
     @property
@@ -28,7 +28,7 @@ class UtilityBill:
     @property
     def amounts(self) -> BilledAmounts:
         """What the utility billed for the period."""
-        return BilledAmounts(kwh=self.kwh, cost=self.cost)
+        return BilledAmounts(quantity=self.quantity, cost=self.cost)
 
 
 def _exclusive_end(end: datetime) -> date:
@@ -38,15 +38,15 @@ def _exclusive_end(end: datetime) -> date:
 def bills_from_reads(
     reads: Iterable[tuple[datetime, datetime, float | None, float | None]],
 ) -> list[UtilityBill]:
-    """Bill periods, oldest first, from ``(start, end, kwh, cost)`` with aware datetimes.
+    """Bill periods, oldest first, from ``(start, end, quantity, cost)`` with aware datetimes.
 
     Times keep their own time zone: bill dates are the utility's local dates.
     """
     by_start: dict[date, UtilityBill] = {}
-    for start_time, end_time, kwh, cost in reads:
+    for start_time, end_time, quantity, cost in reads:
         start, end = start_time.date(), _exclusive_end(end_time)
         if end > start and start not in by_start:
-            by_start[start] = UtilityBill(start, end, kwh, cost)
+            by_start[start] = UtilityBill(start, end, quantity, cost)
     bills = sorted(by_start.values(), key=lambda b: b.start)
     # Bills are contiguous; a one-day gap is a last day reported at midnight.
     for index in range(len(bills) - 1):

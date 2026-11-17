@@ -48,16 +48,16 @@ def test_empty_and_duplicate_periods_are_dropped() -> None:
         ]
     )
     assert len(bills) == 1
-    assert bills[0].kwh == 1.0
+    assert bills[0].quantity == 1.0
 
 
 def record(start: date, end: date, source: Source) -> CycleRecord:
     totals = CycleTotals(
-        metered_kwh=1.0,
-        export_kwh=None,
-        netted_kwh=None,
-        utility_kwh=1.0,
-        utility_export_kwh=None,
+        metered=1.0,
+        export=None,
+        netted=None,
+        utility=1.0,
+        utility_export=None,
         coverage=Coverage(imports=1.0, utility=1.0),
     )
     return build_record(
@@ -66,7 +66,7 @@ def record(start: date, end: date, source: Source) -> CycleRecord:
 
 
 def bill(start: date, end: date) -> UtilityBill:
-    return UtilityBill(start, end, kwh=500.0, cost=80.0)
+    return UtilityBill(start, end, quantity=500.0, cost=80.0)
 
 
 CURRENT = date(2026, 10, 19)
@@ -96,7 +96,7 @@ def test_matching_record_is_kept_with_amounts() -> None:
     result = merge_bills([existing], BILLS, CURRENT, 12)
     assert len(result.keep) == 1
     assert result.keep[0].bill == BilledAmounts(500.0, 80.0)
-    assert result.keep[0].metered_kwh == existing.metered_kwh
+    assert result.keep[0].metered == existing.metered
     assert [b.start for b in result.compute] == [date(2026, 7, 18), date(2026, 8, 19)]
 
     estimated = record(date(2026, 9, 18), CURRENT, Source.BACKFILL)

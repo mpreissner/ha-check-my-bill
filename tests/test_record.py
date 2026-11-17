@@ -12,6 +12,7 @@ from core.record import (
     build_record,
     closed_by_rollover,
     reprice,
+    upgrade_record_dict,
 )
 from core.tariff import RateSpec, Tariff, TariffVersion
 
@@ -23,11 +24,11 @@ TARIFF = Tariff(
 
 def totals(utility: float | None = 300.0, utility_cov: float | None = 1.0) -> CycleTotals:
     return CycleTotals(
-        metered_kwh=305.0,
-        export_kwh=2.0,
-        netted_kwh=303.5,
-        utility_kwh=utility,
-        utility_export_kwh=None,
+        metered=305.0,
+        export=2.0,
+        netted=303.5,
+        utility=utility,
+        utility_export=None,
         coverage=Coverage(imports=1.0, exports=1.0, utility=utility_cov),
     )
 
@@ -171,10 +172,10 @@ def test_bill_round_trips_and_survives_reprice() -> None:
         final=True,
         closed=True,
         tariff=TARIFF,
-        bill=BilledAmounts(kwh=301.0, cost=55.5),
+        bill=BilledAmounts(quantity=301.0, cost=55.5),
     )
     data = json.loads(json.dumps(record.to_dict()))
-    assert data["bill"] == {"kwh": 301.0, "cost": 55.5}
+    assert data["bill"] == {"quantity": 301.0, "cost": 55.5}
     assert CycleRecord.from_dict(data) == record
     assert reprice(record, tariff=None).bill == record.bill
 
@@ -185,3 +186,62 @@ def test_bill_round_trips_and_survives_reprice() -> None:
     legacy = without.to_dict()
     del legacy["bill"]
     assert CycleRecord.from_dict(legacy) == without
+
+
+LEGACY_KEYS = {
+    "metered_kwh": "metered",
+    "export_kwh": "export",
+    "netted_kwh": "netted",
+    "utility_kwh": "utility",
+    "utility_export_kwh": "utility_export",
+}
+
+
+def _legacy(data: dict) -> dict:
+    """``data`` as 0.1.0b3 stored it, with the kWh-named keys."""
+    old = {next((o for o, n in LEGACY_KEYS.items() if n == k), k): v for k, v in data.items()}
+    old["bill"] = {"kwh": data["bill"]["quantity"], "cost": data["bill"]["cost"]}
+    expected = dict(data["expected_cost"])
+    expected["billed_kwh"] = expected.pop("billed_quantity")
+    old["expected_cost"] = expected
+    return old
+
+
+def test_legacy_keys_load_and_save_as_new() -> None:
+    record = build_record(
+        CYCLE,
+        totals(),
+        source=Source.UTILITY,
+        final=True,
+        closed=True,
+        tariff=TARIFF,
+        bill=BilledAmounts(quantity=301.0, cost=55.5),
+    )
+    current = json.loads(json.dumps(record.to_dict()))
+    legacy = _legacy(current)
+    assert "metered_kwh" in legacy
+    assert "kwh" in legacy["bill"]
+    assert "billed_kwh" in legacy["expected_cost"]
+
+    loaded = CycleRecord.from_dict(legacy)
+    assert loaded == record
+    saved = loaded.to_dict()
+    assert saved == current
+    assert not any(k.endswith("_kwh") for k in saved)
+
+
+def test_upgrade_record_dict() -> None:
+    record = build_record(
+        CYCLE,
+        totals(),
+        source=Source.UTILITY,
+        final=True,
+        closed=True,
+        tariff=TARIFF,
+        bill=BilledAmounts(quantity=301.0, cost=55.5),
+    )
+    current = record.to_dict()
+    legacy = _legacy(current)
+    assert upgrade_record_dict(current) == current
+    assert upgrade_record_dict(legacy) == current
+    assert "metered_kwh" in legacy  # the input is not changed

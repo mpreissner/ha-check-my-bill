@@ -9,7 +9,7 @@ from core.tariff import (
     Tariff,
     TariffVersion,
     Tier,
-    billed_kwh,
+    billed_quantity,
     cost,
 )
 
@@ -122,22 +122,22 @@ def test_empty_range_rejected() -> None:
 
 def test_export_ignored_without_net_metering() -> None:
     tariff = Tariff((flat(export_rate=0.05),), ExportMode.NONE)
-    result = cost(tariff, JUN_1, JUL_1, 100.0, export_kwh=30.0)
-    assert result.billed_kwh == 100.0
+    result = cost(tariff, JUN_1, JUL_1, 100.0, exports=30.0)
+    assert result.billed_quantity == 100.0
     assert result.export_credit == 0.0
 
 
 def test_net_metering_bills_net_and_floors_at_zero() -> None:
     tariff = Tariff((flat(),), ExportMode.NET_METERING)
-    assert cost(tariff, JUN_1, JUL_1, 100.0, export_kwh=30.0).billed_kwh == 70.0
-    assert cost(tariff, JUN_1, JUL_1, 10.0, export_kwh=30.0).total == pytest.approx(0.0)
-    assert billed_kwh(ExportMode.NET_METERING, 10.0, 30.0) == 0.0
+    assert cost(tariff, JUN_1, JUL_1, 100.0, exports=30.0).billed_quantity == 70.0
+    assert cost(tariff, JUN_1, JUL_1, 10.0, exports=30.0).total == pytest.approx(0.0)
+    assert billed_quantity(ExportMode.NET_METERING, 10.0, 30.0) == 0.0
 
 
 def test_separate_rate_credits_export() -> None:
     tariff = Tariff((flat(export_rate=0.05),), ExportMode.SEPARATE_RATE)
-    result = cost(tariff, JUN_1, JUL_1, 100.0, export_kwh=40.0)
-    assert result.billed_kwh == 100.0
+    result = cost(tariff, JUN_1, JUL_1, 100.0, exports=40.0)
+    assert result.billed_quantity == 100.0
     assert result.export_credit == pytest.approx(2.0)
     assert result.total == pytest.approx(15.0 - 2.0)
 

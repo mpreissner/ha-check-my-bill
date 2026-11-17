@@ -292,7 +292,7 @@ class CheckMyBillCard extends HTMLElement {
     return this._hass?.locale?.language ?? this._hass?.language ?? navigator.language;
   }
 
-  _kwh(value, digits = 0) {
+  _qty(value, digits = 0) {
     if (value === null || value === undefined) return "—";
     return new Intl.NumberFormat(this._lang, {
       minimumFractionDigits: digits,
@@ -343,23 +343,23 @@ class CheckMyBillCard extends HTMLElement {
 
   /** Two horizontal bars comparing Home Assistant's meter with the utility's. */
   _meters(record) {
-    const ha = record.metered_kwh ?? 0;
-    const utility = record.utility_kwh ?? 0;
+    const ha = record.metered ?? 0;
+    const utility = record.utility ?? 0;
     const max = Math.max(ha, utility, 1e-9);
     const coverage = record.coverage?.utility ?? 0;
     const partial =
-      record.utility_kwh != null && coverage < 1
+      record.utility != null && coverage < 1
         ? ` <span class="muted">· ${this._pct(coverage)} reported</span>`
         : "";
     const bar = (name, cls, value, extra) => `
       <div class="meter">
-        <div class="meter-label"><span>${name}</span><span class="num">${this._kwh(value)} kWh${extra}</span></div>
+        <div class="meter-label"><span>${name}</span><span class="num">${this._qty(value)} kWh${extra}</span></div>
         <div class="track"><div class="fill ${cls}" style="width:${((value ?? 0) / max) * 100}%"></div></div>
       </div>`;
-    return `<div class="meters">${bar("Home Assistant", "ha", record.metered_kwh, "")}${bar(
+    return `<div class="meters">${bar("Home Assistant", "ha", record.metered, "")}${bar(
       "Utility",
       "utility",
-      record.utility_kwh,
+      record.utility,
       partial,
     )}</div>`;
   }
@@ -427,7 +427,7 @@ class CheckMyBillCard extends HTMLElement {
   /** The tolerance band as a scale, with a marker where the utility's reading landed. */
   _band(record) {
     const [low, high] = record.band;
-    const value = record.utility_kwh;
+    const value = record.utility;
     const points = [low, high, ...(value == null ? [] : [value])];
     const span = Math.max(...points) - Math.min(...points) || 1;
     const lo = Math.min(...points) - span * 0.35;
@@ -435,17 +435,17 @@ class CheckMyBillCard extends HTMLElement {
     const at = (v) => `${((v - lo) / (hi - lo)) * 100}%`;
     const [, color] = this._status(record.status);
     const tol = this._data?.tolerance_pct;
-    let caption = `Expected utility reading ${this._kwh(low)}–${this._kwh(high)} kWh`;
+    let caption = `Expected utility reading ${this._qty(low)}–${this._qty(high)} kWh`;
     if (tol !== undefined) caption += ` (±${esc(tol)}%)`;
     if (record.deviation_pct) {
       const sign = record.deviation_pct > 0 ? "+" : "";
-      caption += `; utility is ${sign}${this._kwh(record.deviation_pct, 1)}% outside it`;
+      caption += `; utility is ${sign}${this._qty(record.deviation_pct, 1)}% outside it`;
     }
     const marker =
       value == null
         ? ""
         : `<div class="band-marker" style="left:${at(value)};--pill:${color}"
-              title="Utility ${this._kwh(value)} kWh"></div>`;
+              title="Utility ${this._qty(value)} kWh"></div>`;
     return `
       <div class="block">
         <div class="block-title">Reconciliation</div>
@@ -477,15 +477,15 @@ class CheckMyBillCard extends HTMLElement {
           </table>
           <div class="muted">Priced on ${
             record.cost_basis === "utility" ? "the utility's" : "Home Assistant's"
-          } ${this._kwh(cost.billed_kwh, 1)} kWh.</div>
+          } ${this._qty(cost.billed_quantity, 1)} kWh.</div>
         </div>`);
     }
     const side = [this._meters(record)];
     if (record.band) side.push(this._band(record));
     if (this._data?.export_mode && this._data.export_mode !== "none") {
       side.push(
-        `<div class="muted">Export: HA ${this._kwh(record.export_kwh, 1)} kWh, utility ${this._kwh(
-          record.utility_export_kwh,
+        `<div class="muted">Export: HA ${this._qty(record.export, 1)} kWh, utility ${this._qty(
+          record.utility_export,
           1,
         )} kWh.</div>`,
       );
@@ -518,8 +518,8 @@ class CheckMyBillCard extends HTMLElement {
               <span class="status-dot" style="--pill:${color}" title="${esc(label)}"></span>
               <div class="row-main">
                 <div class="row-dates">${this._dates(c)}</div>
-                <div class="muted small">${esc(label)} · HA ${this._kwh(c.metered_kwh)} · utility ${this._kwh(
-                  c.utility_kwh,
+                <div class="muted small">${esc(label)} · HA ${this._qty(c.metered)} · utility ${this._qty(
+                  c.utility,
                 )} kWh</div>
               </div>
               ${right}

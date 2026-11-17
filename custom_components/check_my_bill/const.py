@@ -27,3 +27,5 @@ BACKFILL_MAX_CYCLES = 12
 BILL_FETCH_INTERVAL = timedelta(days=1)
 """How often past bill periods are read from Opower (docs/specs/opower-bills.md §5)."""
 STORE_VERSION = 1
+STORE_MINOR_VERSION = 2
+"""1.2 renamed the kWh-named record keys (docs/specs/gas.md §1.1)."""

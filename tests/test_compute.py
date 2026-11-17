@@ -20,23 +20,23 @@ def test_gross_netted_and_export() -> None:
     imports = {h(0): 1.0, h(1): 0.5, h(2): 0.2, h(3): 2.0}
     exports = {h(0): 0.0, h(1): 0.8, h(2): 0.1, h(3): 0.0}
     totals = compute_totals(SLOTS, imports, exports)
-    assert totals.metered_kwh == pytest.approx(3.7)
-    assert totals.export_kwh == pytest.approx(0.9)
+    assert totals.metered == pytest.approx(3.7)
+    assert totals.export == pytest.approx(0.9)
     # Hour 1 nets to zero, hour 2 to 0.1.
-    assert totals.netted_kwh == pytest.approx(1.0 + 0.0 + 0.1 + 2.0)
+    assert totals.netted == pytest.approx(1.0 + 0.0 + 0.1 + 2.0)
     assert totals.coverage == Coverage(imports=1.0, exports=1.0)
 
 
 def test_netted_equals_gross_without_export_stat() -> None:
     totals = compute_totals(SLOTS, dict.fromkeys(SLOTS, 1.0))
-    assert totals.netted_kwh == totals.metered_kwh == 4.0
-    assert totals.export_kwh is None
+    assert totals.netted == totals.metered == 4.0
+    assert totals.export is None
 
 
 def test_missing_slots_lower_coverage_and_outside_slots_ignored() -> None:
     utility = {h(0): 1.0, h(1): 1.0, h(9): 50.0}
     totals = compute_totals(SLOTS, dict.fromkeys(SLOTS, 1.0), utility=utility)
-    assert totals.utility_kwh == 2.0
+    assert totals.utility == 2.0
     assert totals.coverage.utility == 0.5
     assert totals.coverage.imports == 1.0
 
@@ -45,7 +45,7 @@ def test_interior_gap_keeps_full_coverage() -> None:
     # The recorder folds a missed hour's energy into the next row's change.
     imports = {h(0): 1.0, h(2): 2.0, h(3): 1.0}
     totals = compute_totals(SLOTS, imports, utility={h(1): 1.0, h(2): 1.0})
-    assert totals.metered_kwh == 4.0
+    assert totals.metered == 4.0
     assert totals.coverage.imports == 1.0
     assert totals.coverage.utility == 0.5  # leading and trailing gaps are missing data
 
@@ -53,38 +53,38 @@ def test_interior_gap_keeps_full_coverage() -> None:
 def test_daily_data_has_no_netted_value() -> None:
     days = [T0, T0 + timedelta(days=1)]
     totals = compute_totals(days, {T0: 10.0, days[1]: 12.0}, {T0: 1.0}, hourly=False)
-    assert totals.metered_kwh == 22.0
-    assert totals.netted_kwh is None
+    assert totals.metered == 22.0
+    assert totals.netted is None
     assert totals.coverage.exports == 0.5
 
 
 def test_empty_period() -> None:
     totals = compute_totals([], {})
-    assert totals.metered_kwh == 0.0
+    assert totals.metered == 0.0
     assert totals.coverage.imports == 0.0
 
 
 def totals(utility_cov: float | None, utility_export: float | None = None) -> CycleTotals:
     return CycleTotals(
-        metered_kwh=100.0,
-        export_kwh=5.0,
-        netted_kwh=97.0,
-        utility_kwh=None if utility_cov is None else 99.0,
-        utility_export_kwh=utility_export,
+        metered=100.0,
+        export=5.0,
+        netted=97.0,
+        utility=None if utility_cov is None else 99.0,
+        utility_export=utility_export,
         coverage=Coverage(imports=1.0, exports=1.0, utility=utility_cov),
     )
 
 
 def test_cost_basis_prefers_complete_utility() -> None:
     basis = cost_basis(totals(1.0))
-    assert (basis.import_kwh, basis.export_kwh, basis.source) == (99.0, 5.0, "utility")
-    assert cost_basis(totals(1.0, utility_export=0.0)).export_kwh == 0.0
+    assert (basis.imports, basis.exports, basis.source) == (99.0, 5.0, "utility")
+    assert cost_basis(totals(1.0, utility_export=0.0)).exports == 0.0
 
 
 def test_cost_basis_falls_back_to_meter() -> None:
     assert cost_basis(totals(0.9)).source == "meter"
     basis = cost_basis(totals(None))
-    assert (basis.import_kwh, basis.source) == (100.0, "meter")
+    assert (basis.imports, basis.source) == (100.0, "meter")
 
 
 def test_project() -> None:

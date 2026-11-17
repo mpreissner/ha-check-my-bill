@@ -41,17 +41,17 @@ class Coverage:
 
 @dataclass(frozen=True, slots=True)
 class CycleTotals:
-    """kWh totals for one period."""
+    """Totals for one period, in the billing unit."""
 
-    metered_kwh: float
+    metered: float
     """Gross grid import measured by HA."""
-    export_kwh: float | None
+    export: float | None
     """Grid export measured by HA, if an export statistic is configured."""
-    netted_kwh: float | None
+    netted: float | None
     """Sum of max(0, import - export) per hour. None when only daily data exists."""
-    utility_kwh: float | None
+    utility: float | None
     """Import as metered by the utility, if a utility statistic is configured."""
-    utility_export_kwh: float | None
+    utility_export: float | None
     coverage: Coverage
 
 
@@ -82,10 +82,10 @@ def compute_totals(
 
     metered, n_import = _sum(imports, slots)
 
-    export_kwh: float | None = None
+    export_total: float | None = None
     export_cov: float | None = None
     if exports is not None:
-        export_kwh, n_export = _sum(exports, slots)
+        export_total, n_export = _sum(exports, slots)
         export_cov = ratio(n_export)
 
     netted: float | None = None
@@ -97,24 +97,24 @@ def compute_totals(
             if slot in wanted
         )
 
-    utility_kwh: float | None = None
+    utility_total: float | None = None
     utility_cov: float | None = None
     if utility is not None:
-        utility_kwh, n_utility = _sum(utility, slots)
+        utility_total, n_utility = _sum(utility, slots)
         utility_cov = ratio(n_utility)
 
-    utility_export_kwh: float | None = None
+    utility_export_total: float | None = None
     utility_export_cov: float | None = None
     if utility_exports is not None:
-        utility_export_kwh, n_uexp = _sum(utility_exports, slots)
+        utility_export_total, n_uexp = _sum(utility_exports, slots)
         utility_export_cov = ratio(n_uexp)
 
     return CycleTotals(
-        metered_kwh=metered,
-        export_kwh=export_kwh,
-        netted_kwh=netted,
-        utility_kwh=utility_kwh,
-        utility_export_kwh=utility_export_kwh,
+        metered=metered,
+        export=export_total,
+        netted=netted,
+        utility=utility_total,
+        utility_export=utility_export_total,
         coverage=Coverage(
             imports=ratio(n_import),
             exports=export_cov,
@@ -126,23 +126,23 @@ def compute_totals(
 
 @dataclass(frozen=True, slots=True)
 class CostBasis:
-    """The kWh an expected cost should be computed from, and where they came from."""
+    """The quantities an expected cost should be computed from, and where they came from."""
 
-    import_kwh: float
-    export_kwh: float
+    imports: float
+    exports: float
     source: str
     """``"utility"`` when the utility's figures are complete, otherwise ``"meter"``."""
 
 
 def cost_basis(totals: CycleTotals) -> CostBasis:
     """Prefer complete utility figures; fall back to HA's meter as an estimate."""
-    if totals.utility_kwh is not None and totals.coverage.utility == 1.0:
-        if totals.utility_export_kwh is not None:
-            export = totals.utility_export_kwh
+    if totals.utility is not None and totals.coverage.utility == 1.0:
+        if totals.utility_export is not None:
+            export = totals.utility_export
         else:
-            export = totals.export_kwh or 0.0
-        return CostBasis(totals.utility_kwh, export, "utility")
-    return CostBasis(totals.metered_kwh, totals.export_kwh or 0.0, "meter")
+            export = totals.export or 0.0
+        return CostBasis(totals.utility, export, "utility")
+    return CostBasis(totals.metered, totals.export or 0.0, "meter")
 
 
 def project(value_to_date: float, elapsed: float, total: float) -> float | None:
