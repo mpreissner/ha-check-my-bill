@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,7 +13,10 @@ from freezegun.api import FrozenDateTimeFactory
 from homeassistant import config_entries
 from homeassistant.components.energy.data import async_get_manager
 from homeassistant.components.recorder.models import StatisticMeanType
-from homeassistant.components.recorder.statistics import async_add_external_statistics
+from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
+    async_import_statistics,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
@@ -28,11 +32,15 @@ from custom_components.check_my_bill.const import (
     CONF_CYCLE_START_ENTITY,
     CONF_EXPORT_MODE,
     CONF_EXPORT_STAT,
+    CONF_HEAT_CONTENT,
     CONF_IMPORT_STAT,
+    CONF_METER,
     CONF_TARIFF,
     CONF_TOLERANCE,
+    CONF_UNIT,
     CONF_UTILITY_EXPORT_STAT,
     CONF_UTILITY_IMPORT_STAT,
+    CONF_UTILITY_UNIT,
     DOMAIN,
 )
 from custom_components.check_my_bill.discovery import (
@@ -47,6 +55,7 @@ EXPORT = "sensor.test_grid_export"
 CONSUMPTION = "opower:test_elec_0000_energy_consumption"
 RETURN = "opower:test_elec_0000_energy_return"
 GAS = "opower:test_gas_0000_energy_consumption"
+GAS_METER = "sensor.test_gas_meter"
 START = "sensor.test_current_bill_start_date"
 END = "sensor.test_current_bill_end_date"
 TODAY = date(2026, 11, 10)
@@ -81,6 +90,27 @@ async def _energy_prefs(hass: HomeAssistant) -> None:
     }
 
 
+_ROW = [{"start": datetime(2026, 11, 1, tzinfo=UTC), "sum": 1.0, "state": 1.0}]
+
+
+def _meta(statistic_id: str, source: str, unit: str) -> Any:
+    return {
+        "has_sum": True,
+        "mean_type": StatisticMeanType.NONE,
+        "name": None,
+        "source": source,
+        "statistic_id": statistic_id,
+        "unit_class": {"kWh": "energy", "thm": "energy", "W": "power"}.get(unit, "volume"),
+        "unit_of_measurement": unit,
+    }
+
+
+async def _meter_stat(hass: HomeAssistant, statistic_id: str, unit: str) -> None:
+    """A recorder statistic, as a utility meter sensor would make."""
+    async_import_statistics(hass, _meta(statistic_id, "recorder", unit), _ROW)
+    await async_wait_recording_done(hass)
+
+
 async def _opower(
     hass: HomeAssistant, disabled_by: er.RegistryEntryDisabler | None
 ) -> MockConfigEntry:
@@ -88,18 +118,9 @@ async def _opower(
     entry = MockConfigEntry(domain="opower", title="Test Utility (user)")
     entry.add_to_hass(hass)
     for statistic_id in (CONSUMPTION, RETURN, GAS):
-        meta: Any = {
-            "has_sum": True,
-            "mean_type": StatisticMeanType.NONE,
-            "name": None,
-            "source": "opower",
-            "statistic_id": statistic_id,
-            "unit_class": "energy",
-            "unit_of_measurement": "kWh",
-        }
-        async_add_external_statistics(
-            hass, meta, [{"start": datetime(2026, 11, 1, tzinfo=UTC), "sum": 1.0, "state": 1.0}]
-        )
+        # Opower labels every gas statistic CCF.
+        unit = "CCF" if statistic_id == GAS else "kWh"
+        async_add_external_statistics(hass, _meta(statistic_id, "opower", unit), _ROW)
     await async_wait_recording_done(hass)
     registry = er.async_get(hass)
     for unique_id, object_id in (
@@ -139,9 +160,9 @@ def _defaults(result: dict[str, Any]) -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("statistic_id", "key"),
     [
-        ("opower:bge_elec_123_energy_consumption", "bge_123"),
-        ("opower:pge_elec_abc_def_energy_consumption", "pge_abc_def"),
-        ("opower:bge_gas_123_energy_consumption", None),
+        ("opower:bge_elec_123_energy_consumption", "bge_123_elec"),
+        ("opower:pge_elec_abc_def_energy_consumption", "pge_abc_def_elec"),
+        ("opower:bge_gas_123_energy_consumption", "bge_123_gas"),
         ("opower:bge_elec_123_energy_return", None),
         ("sensor:bge_elec_123_energy_consumption", None),
     ],
@@ -153,8 +174,9 @@ def test_key_from_statistic(statistic_id: str, key: str | None) -> None:
 @pytest.mark.parametrize(
     ("unique_id", "found"),
     [
-        ("bge_123_elec_start_date", ("bge_123", "start")),
-        ("PGE_abc-def_elec_end_date", ("pge_abc_def", "end")),
+        ("bge_123_elec_start_date", ("bge_123_elec", "start")),
+        ("bge_123_gas_start_date", ("bge_123_gas", "start")),
+        ("PGE_abc-def_elec_end_date", ("pge_abc_def_elec", "end")),
         ("bge_123_elec_usage_to_date", None),
     ],
 )
@@ -191,7 +213,11 @@ async def test_opower_with_disabled_date_sensors(
 
     result = await _start(hass)
     assert result["step_id"] == "user"
-    assert _defaults(result) == {CONF_IMPORT_STAT: IMPORT, CONF_EXPORT_STAT: EXPORT}
+    assert _defaults(result) == {
+        "meter": "electric",
+        CONF_IMPORT_STAT: IMPORT,
+        CONF_EXPORT_STAT: EXPORT,
+    }
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_IMPORT_STAT: IMPORT, CONF_EXPORT_STAT: EXPORT}
@@ -261,7 +287,11 @@ async def test_declining_the_date_sensors_goes_to_cycle(
 
 async def test_without_opower_grid_cycle_tariff(hass: HomeAssistant) -> None:
     result = await _start(hass)
-    assert _defaults(result) == {CONF_IMPORT_STAT: None, CONF_EXPORT_STAT: None}
+    assert _defaults(result) == {
+        "meter": "electric",
+        CONF_IMPORT_STAT: None,
+        CONF_EXPORT_STAT: None,
+    }
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_IMPORT_STAT: IMPORT}
     )
@@ -498,3 +528,171 @@ async def test_settings(hass: HomeAssistant) -> None:
     assert entry.options[CONF_TOLERANCE] == 3.5
     assert entry.options[CONF_EXPORT_MODE] == "separate_rate"
     assert entry.options[CONF_TARIFF] == []
+
+
+# --- gas (docs/specs/gas.md §2) -----------------------------------------------------------
+
+
+async def _gas_flow(hass: HomeAssistant) -> dict[str, Any]:
+    result = await _start(hass)
+    return await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_METER: "gas"})
+
+
+async def test_gas_without_opower(hass: HomeAssistant) -> None:
+    await _meter_stat(hass, GAS_METER, "ft³")
+    result = await _gas_flow(hass)
+    assert result["step_id"] == "gas"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_IMPORT_STAT: GAS_METER}
+    )
+    assert result["step_id"] == "units"
+    assert _defaults(result) == {CONF_UNIT: "thm"}  # no utility statistic to ask about
+
+    # ft³ against therms needs the heat content.
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_UNIT: "thm"})
+    assert result["step_id"] == "heat_content"
+    assert _defaults(result) == {CONF_HEAT_CONTENT: 1.037}
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_HEAT_CONTENT: 1.05}
+    )
+    assert result["step_id"] == "cycle"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_CYCLE_DAY: 3})
+    assert result["step_id"] == "tariff"
+    assert CONF_EXPORT_MODE not in _defaults(result)
+    assert "export_rate" not in _defaults(result)
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"supply": 0.9, "delivery": 0.5}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Check My Bill \u2013 Gas"
+    assert result["data"] == {
+        CONF_METER: "gas",
+        CONF_IMPORT_STAT: GAS_METER,
+        CONF_UNIT: "thm",
+        CONF_HEAT_CONTENT: 1.05,
+        CONF_CYCLE_DAY: 3,
+    }
+    assert result["options"][CONF_EXPORT_MODE] == "none"
+    assert result["options"][CONF_TOLERANCE] == 5.0
+
+
+async def test_gas_same_kind_skips_heat_content(hass: HomeAssistant) -> None:
+    await _meter_stat(hass, GAS_METER, "ft³")
+    result = await _gas_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_IMPORT_STAT: GAS_METER}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_UNIT: "CCF"})
+    assert result["step_id"] == "cycle"
+
+
+async def test_gas_opower_account_and_forecast_unit(hass: HomeAssistant) -> None:
+    await _opower(hass, None)
+    await _meter_stat(hass, GAS_METER, "CCF")
+    opower = hass.config_entries.async_entries("opower")[0]
+    account = SimpleNamespace(meter_type=SimpleNamespace(name="GAS"), utility_account_id="0000")
+    forecast = SimpleNamespace(unit_of_measure=SimpleNamespace(name="THERM"))
+    opower.mock_state(hass, config_entries.ConfigEntryState.LOADED)
+    opower.runtime_data = SimpleNamespace(
+        api=SimpleNamespace(utility=SimpleNamespace(subdomain=lambda: "test")),
+        data={"0000": SimpleNamespace(account=account, forecast=forecast)},
+    )
+
+    result = await _gas_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_IMPORT_STAT: GAS_METER}
+    )
+    assert result["step_id"] == "utility"
+    assert _defaults(result)["account"] == GAS  # only the gas account is offered
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"account": GAS})
+    assert result["step_id"] == "units"
+    # The forecast says therms, though the statistic claims CCF.
+    assert _defaults(result) == {CONF_UNIT: "thm", CONF_UTILITY_UNIT: "thm"}
+
+    # CCF meter, therm data and bill: mixed.
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_UNIT: "thm", CONF_UTILITY_UNIT: "thm"}
+    )
+    assert result["step_id"] == "heat_content"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_HEAT_CONTENT: 1.037}
+    )
+    assert result["step_id"] == "cycle"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_CYCLE_DAY: 3})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["title"] == "Check My Bill \u2013 Gas (Test Utility (user))"
+    assert result["data"][CONF_UTILITY_IMPORT_STAT] == GAS
+    assert result["data"][CONF_UTILITY_UNIT] == "thm"
+    assert CONF_UTILITY_EXPORT_STAT not in result["data"]
+
+
+async def test_gas_statistic_rejected_for_electric(hass: HomeAssistant) -> None:
+    await _meter_stat(hass, GAS_METER, "ft³")
+    result = await _start(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["errors"] == {CONF_IMPORT_STAT: "import_required"}
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_IMPORT_STAT: GAS_METER}
+    )
+    assert result["errors"] == {"base": "not_an_electric_statistic"}
+
+
+async def test_electric_statistic_rejected_for_gas(hass: HomeAssistant) -> None:
+    await _meter_stat(hass, IMPORT, "W")
+    result = await _gas_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_IMPORT_STAT: IMPORT}
+    )
+    assert result["errors"] == {"base": "not_a_gas_statistic"}
+
+
+def _gas_entry(hass: HomeAssistant, **data: Any) -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=GAS_METER,
+        data={CONF_METER: "gas", CONF_IMPORT_STAT: GAS_METER, CONF_CYCLE_DAY: 3, **data},
+        options={CONF_TARIFF: [], CONF_EXPORT_MODE: "none", CONF_TOLERANCE: 5.0},
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_gas_reconfigure_to_a_mixed_unit_adds_heat_content(hass: HomeAssistant) -> None:
+    await _meter_stat(hass, GAS_METER, "ft³")
+    entry = _gas_entry(hass, **{CONF_UNIT: "CCF"})
+    result = await entry.start_reconfigure_flow(hass)
+    fields = _defaults(result)
+    assert CONF_EXPORT_STAT not in fields
+    assert CONF_UTILITY_EXPORT_STAT not in fields
+    assert fields[CONF_UNIT] == "CCF"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_IMPORT_STAT: GAS_METER, CONF_CYCLE_DAY: 3, CONF_UNIT: "thm"}
+    )
+    assert result["reason"] == "reconfigure_successful"
+    assert dict(entry.data) == {
+        CONF_METER: "gas",
+        CONF_IMPORT_STAT: GAS_METER,
+        CONF_CYCLE_DAY: 3,
+        CONF_UNIT: "thm",
+        CONF_HEAT_CONTENT: 1.037,
+    }
+
+
+async def test_gas_settings(hass: HomeAssistant) -> None:
+    await _meter_stat(hass, GAS_METER, "ft³")
+    entry = _gas_entry(hass, **{CONF_UNIT: "CCF"})
+    result = await _options(hass, entry, "settings")
+    assert _defaults(result) == {CONF_TOLERANCE: 5.0}  # no export mode, units not mixed
+
+    entry = _gas_entry(hass, **{CONF_UNIT: "thm", CONF_HEAT_CONTENT: 1.037})
+    entry._unique_id = "other"
+    result = await _options(hass, entry, "settings")
+    assert _defaults(result) == {CONF_TOLERANCE: 5.0, CONF_HEAT_CONTENT: 1.037}
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_TOLERANCE: 4.0, CONF_HEAT_CONTENT: 1.06}
+    )
+    assert entry.options[CONF_HEAT_CONTENT] == 1.06
+    assert CONF_EXPORT_MODE not in entry.options or entry.options[CONF_EXPORT_MODE] == "none"

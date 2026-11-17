@@ -5,7 +5,7 @@ one is pure: totals in, record out. The HA layer only fetches the statistics.
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from enum import StrEnum
 from typing import Any
@@ -291,6 +291,28 @@ def reprice(
         export_mode=export_mode,
         tolerance=tolerance,
         bill=record.bill,
+    )
+
+
+def _times(value: float | None, factor: float) -> float | None:
+    return None if value is None else value * factor
+
+
+def rescale(record: CycleRecord, factor: float) -> CycleRecord:
+    """``record`` with its quantities multiplied by ``factor``, for a billing-unit change.
+
+    Status, band and cost are left as they were; :func:`reprice` rebuilds them.
+    """
+    return replace(
+        record,
+        metered=record.metered * factor,
+        export=_times(record.export, factor),
+        netted=_times(record.netted, factor),
+        utility=_times(record.utility, factor),
+        utility_export=_times(record.utility_export, factor),
+        bill=None
+        if record.bill is None
+        else replace(record.bill, quantity=_times(record.bill.quantity, factor)),
     )
 
 

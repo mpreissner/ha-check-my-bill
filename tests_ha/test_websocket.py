@@ -59,6 +59,7 @@ async def test_cycles(hass: HomeAssistant, client: Any, entry_id: str) -> None:
     result = msg["result"]
 
     assert result["currency"] == hass.config.currency
+    assert (result["meter"], result["unit"]) == ("electric", "kWh")
     assert result["export_mode"] == "none"
     assert result["tolerance_pct"] == 2.0
     assert result["has_tariff"] is True
@@ -111,6 +112,7 @@ async def test_range_matches_the_stored_cycle(
     expected = stored.to_dict()
     del expected["source"], expected["final"]
     expected["last_day"] = "2026-11-02"
+    expected |= {"meter": "electric", "unit": "kWh"}
     assert msg["result"] == expected
 
 

@@ -21,6 +21,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import BillData, CheckMyBillConfigEntry, CheckMyBillCoordinator
 from .core.reconcile import Status
+from .stats import VOLUME
 
 PARALLEL_UPDATES = 0
 
@@ -156,6 +157,14 @@ class BillSensor(CoordinatorEntity[CheckMyBillCoordinator], SensorEntity):
         )
         if description.device_class is SensorDeviceClass.MONETARY:
             self._attr_native_unit_of_measurement = coordinator.hass.config.currency
+        elif description.device_class is SensorDeviceClass.ENERGY:
+            # The billing unit; HA's GAS class takes volumes but not therms (gas.md §5).
+            unit = coordinator.unit
+            self._attr_native_unit_of_measurement = unit
+            if unit in VOLUME.units:
+                self._attr_device_class = SensorDeviceClass.GAS
+                # Without it, a metric unit system shows m³ instead of the billing unit.
+                self._attr_suggested_unit_of_measurement = unit
 
     @property
     def native_value(self) -> StateValue:

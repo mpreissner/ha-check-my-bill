@@ -62,6 +62,8 @@ def ws_cycles(
         msg["id"],
         {
             "currency": hass.config.currency,
+            "meter": coordinator.meter.value,
+            "unit": coordinator.unit,
             "export_mode": coordinator.export_mode.value,
             "tolerance_pct": round(coordinator.tolerance * 100, 4),
             "has_tariff": coordinator.tariff is not None,
@@ -101,4 +103,6 @@ async def ws_range(
     record = await coordinator.async_range(Cycle(start, end))
     result = _record(record)
     del result["source"], result["final"], result["estimated"]
+    result["meter"] = coordinator.meter.value
+    result["unit"] = coordinator.unit
     connection.send_result(msg["id"], result)

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 
+from homeassistant.components.recorder.statistics import async_list_statistic_ids
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
@@ -24,11 +25,16 @@ from .const import (
     CONF_CYCLE_START_ENTITY,
     CONF_EXPORT_MODE,
     CONF_EXPORT_STAT,
+    CONF_HEAT_CONTENT,
     CONF_IMPORT_STAT,
+    CONF_METER,
     CONF_TARIFF,
     CONF_TOLERANCE,
+    CONF_UNIT,
     CONF_UTILITY_EXPORT_STAT,
     CONF_UTILITY_IMPORT_STAT,
+    CONF_UTILITY_UNIT,
+    DEFAULT_GAS_TOLERANCE_PCT,
     DEFAULT_TOLERANCE_PCT,
     DOMAIN,
     UPDATE_INTERVAL,
@@ -43,11 +49,13 @@ from .core.record import (
     build_record,
     closed_by_rollover,
     reprice,
+    rescale,
 )
 from .core.serde import tariff_from_options
 from .core.tariff import CostBreakdown, ExportMode, cost
+from .core.units import KWH, Meter, scale
 from .opower_bills import BillFetchError, async_fetch_bills
-from .stats import StatIds, cycle_totals, earliest_data
+from .stats import ENERGY, VOLUME, StatIds, cycle_totals, earliest_data
 from .store import CycleStore, StoredState
 
 _LOGGER = logging.getLogger(__name__)
@@ -95,15 +103,26 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
             update_interval=UPDATE_INTERVAL,
         )
         data, options = entry.data, entry.options
+        self.meter = Meter(data.get(CONF_METER, Meter.ELECTRIC))
+        self.unit: str = data.get(CONF_UNIT, KWH)
+        self.utility_unit: str | None = data.get(CONF_UTILITY_UNIT)
+        heat_content = options.get(CONF_HEAT_CONTENT, data.get(CONF_HEAT_CONTENT))
+        self.heat_content = None if heat_content is None else float(heat_content)
         self.ids = StatIds(
             imports=data[CONF_IMPORT_STAT],
             exports=data.get(CONF_EXPORT_STAT),
             utility=data.get(CONF_UTILITY_IMPORT_STAT),
             utility_exports=data.get(CONF_UTILITY_EXPORT_STAT),
         )
-        self.export_mode = ExportMode(options.get(CONF_EXPORT_MODE) or ExportMode.NONE)
+        gas = self.meter is Meter.GAS
+        self.export_mode = (
+            ExportMode.NONE if gas else ExportMode(options.get(CONF_EXPORT_MODE) or ExportMode.NONE)
+        )
         self.tariff = tariff_from_options(options.get(CONF_TARIFF), self.export_mode)
-        self.tolerance = float(options.get(CONF_TOLERANCE, DEFAULT_TOLERANCE_PCT)) / 100
+        default_tolerance = DEFAULT_GAS_TOLERANCE_PCT if gas else DEFAULT_TOLERANCE_PCT
+        self.tolerance = float(options.get(CONF_TOLERANCE, default_tolerance)) / 100
+        self.daily_only = gas
+        """Gas is compared by day (docs/specs/gas.md §4)."""
         self.store = CycleStore(hass, entry.entry_id)
         self._state: StoredState | None = None
         self._lock = asyncio.Lock()
@@ -149,7 +168,7 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         self, cycle: Cycle, source: Source, today: date, bill: BilledAmounts | None = None
     ) -> CycleRecord:
         tz = dt_util.get_default_time_zone()
-        totals = await cycle_totals(self.hass, self.ids, cycle, tz)
+        totals = await cycle_totals(self.hass, self.ids, cycle, tz, daily_only=self.daily_only)
         return build_record(
             cycle,
             totals,
@@ -190,6 +209,12 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         if bills is None:
             return
         self._bills_fetched, self._bill_error_logged = now, False
+        if (factor := self.ids.scale.get(self.ids.utility or "", 1.0)) != 1.0:
+            # Bills are in the account's unit, like the utility statistic (gas.md §3.3).
+            bills = [
+                replace(b, quantity=None if b.quantity is None else b.quantity * factor)
+                for b in bills
+            ]
 
         first_day = await earliest_data(self.hass, self.ids, since, now, tz)
         if first_day is None:
@@ -214,20 +239,82 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         await issues.async_check(self.hass, self.config_entry, self.ids, self.export_mode, recent)
         return data
 
+    def _scale(self, from_unit: str | None) -> float | None:
+        return scale(from_unit, self.unit, self.heat_content, volume=VOLUME, energy=ENERGY)
+
+    async def _update_scales(self, state: StoredState) -> None:
+        """Scale each statistic from its own unit to the billing unit (gas.md §3.1).
+
+        A statistic whose unit differs from the one stored last time raises a repair issue.
+        """
+        configured = self.ids.configured()
+        listed = await async_list_statistic_ids(self.hass, statistic_ids=configured)
+        units: dict[str, str | None] = {
+            s["statistic_id"]: s.get("statistics_unit_of_measurement") for s in listed
+        }
+        factors: dict[str, float] = {}
+        for statistic_id in configured:
+            if statistic_id not in units:
+                continue  # missing_statistic covers it
+            unit = units[statistic_id]
+            if statistic_id == self.ids.utility and self.utility_unit:
+                unit = self.utility_unit
+            factor = self._scale(unit)
+            if factor is None:
+                _LOGGER.warning(
+                    "No conversion from %s (%s) to %s; reading it unscaled",
+                    statistic_id,
+                    unit,
+                    self.unit,
+                )
+                factor = 1.0
+            factors[statistic_id] = factor
+        self.ids = replace(self.ids, scale=factors)
+
+        changed = [
+            s
+            for s, unit in units.items()
+            if state.stat_units is not None
+            and state.stat_units.get(s, unit) is not None
+            and state.stat_units.get(s, unit) != unit
+        ]
+        if changed:
+            _LOGGER.warning("Statistic units changed: %s", changed)
+            issues.async_unit_changed(self.hass, self.config_entry, changed)
+        state.stat_units = {**(state.stat_units or {}), **units}
+
+    def _convert_history(self, state: StoredState) -> StoredState:
+        """Stored records in the entry's billing unit, after a change of unit (gas.md §2.1)."""
+        old = state.unit or KWH
+        if old == self.unit or not state.cycles:
+            state.unit = self.unit
+            return state
+        factor = self._scale(old)
+        if factor is None:
+            _LOGGER.info("Billing unit changed from %s to %s; discarding history", old, self.unit)
+            return StoredState(unit=self.unit)
+        _LOGGER.info("Billing unit changed from %s to %s; converting history", old, self.unit)
+        # Non-final records are recomputed from the statistics anyway.
+        state.cycles = [rescale(r, factor) for r in state.cycles]
+        state.unit = self.unit
+        return state
+
     async def _update(self) -> BillData:
         now = dt_util.now()
         today = now.date()
         if self._state is None:
             self._state = await self.store.async_load()
-            sources = asdict(self.ids)
+            sources = self.ids.sources()
             if self._state.sources not in (None, sources):
                 # Reconfigured onto other statistics: the stored records describe other meters.
                 _LOGGER.info("Statistics changed; discarding stored cycle history")
                 self._state = StoredState()
             self._state.sources = sources
+            self._state = self._convert_history(self._state)
             # Settings may have changed since the records were built (spec services-api §2).
             self._state.cycles = [self._reprice(r) for r in self._state.cycles]
         state = self._state
+        await self._update_scales(state)
 
         found = self._configured_cycle(today)
         if found is not None:
@@ -265,8 +352,16 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         self, current: Cycle, source: Source, now: datetime
     ) -> tuple[CycleRecord, CostBreakdown | None]:
         tz = dt_util.get_default_time_zone()
-        until = now.replace(minute=0, second=0, microsecond=0)
-        totals = await cycle_totals(self.hass, self.ids, current, tz, until)
+        if self.daily_only:
+            # Whole days only: today has no utility data yet.
+            until = datetime.combine(now.date(), time.min, tzinfo=tz)
+            cost_until = now.date()
+        else:
+            until = now.replace(minute=0, second=0, microsecond=0)
+            cost_until = now.date() + timedelta(days=1)
+        totals = await cycle_totals(
+            self.hass, self.ids, current, tz, until, daily_only=self.daily_only
+        )
         record = build_record(
             current,
             totals,
@@ -276,7 +371,7 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
             tariff=self.tariff,
             export_mode=self.export_mode,
             tolerance=self.tolerance,
-            cost_until=now.date() + timedelta(days=1),
+            cost_until=cost_until,
         )
         if self.tariff is None:
             return record, None
@@ -368,7 +463,9 @@ class CheckMyBillCoordinator(DataUpdateCoordinator[BillData]):
         now = dt_util.now()
         closed = cycle.local_bounds(tz)[1] <= now
         until = None if closed else now.replace(minute=0, second=0, microsecond=0)
-        totals = await cycle_totals(self.hass, self.ids, cycle, tz, until)
+        totals = await cycle_totals(
+            self.hass, self.ids, cycle, tz, until, daily_only=self.daily_only
+        )
         return build_record(
             cycle,
             totals,
