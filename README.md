@@ -41,13 +41,14 @@ To install by hand, copy `custom_components/check_my_bill` into your configurati
 
 The setup steps are:
 
-1. **Grid statistics.** These are the import and export statistics, filled in from the
-   Energy dashboard.
-2. **Utility account.** Pick the Opower account to compare against, or **Don't use utility
+1. **Meter.** Electric or gas. The next page lists only the statistics that fit it.
+2. **Grid statistics.** These are the import and export statistics, filled in from the
+   Energy dashboard. Only energy statistics are listed.
+3. **Utility account.** Pick the Opower account to compare against, or **Don't use utility
    data**. With Opower, the billing dates come from the utility.
-3. **Billing cycle.** Asked only when no utility dates are available. Enter the day of the
+4. **Billing cycle.** Asked only when no utility dates are available. Enter the day of the
    month your meter is read, or the end date of your last bill.
-4. **Rates.** Supply and delivery per kWh, fixed charges, tax, and how exported energy is
+5. **Rates.** Supply and delivery per kWh, fixed charges, tax, and how exported energy is
    billed. Leave the rates empty to compare kWh only.
 
 Under **Configure** on the integration you can change:
@@ -61,7 +62,8 @@ Choose **Reconfigure** to pick different statistics. That rebuilds the cycle his
 
 ### Gas
 
-Add a second entry and choose **Gas** on the first page.
+Add a second entry and choose **Gas** on the first page. The next page lists only statistics
+in a volume (ft³, m³, CCF) or therms.
 
 - **Unit.** Setup asks which unit your bill charges by: therms, CCF or m³. Quantities,
   rates and sensors all use that unit.

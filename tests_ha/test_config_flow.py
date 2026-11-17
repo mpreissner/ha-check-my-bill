@@ -143,6 +143,27 @@ async def _start(hass: HomeAssistant) -> dict[str, Any]:
     )
 
 
+async def _electric_flow(hass: HomeAssistant) -> dict[str, Any]:
+    result = await _start(hass)
+    assert result["step_id"] == "user"
+    assert _defaults(result) == {CONF_METER: "electric"}  # nothing else on the first page
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_METER: "electric"}
+    )
+
+
+@pytest.fixture
+async def grid_stats(hass: HomeAssistant) -> None:
+    """The grid import and export meters, in kWh."""
+    await _meter_stat(hass, IMPORT, "kWh")
+    await _meter_stat(hass, EXPORT, "kWh")
+
+
+def _offered(result: dict[str, Any], field: str) -> list[str]:
+    """The statistics a dropdown lists."""
+    return [o["value"] for o in result["data_schema"].schema[field].config["options"]]
+
+
 def _defaults(result: dict[str, Any]) -> dict[str, Any]:
     """Each field's suggested value or default, as the form would pre-fill it."""
     out = {}
@@ -204,19 +225,16 @@ def test_cycle_day_from_last_bill_end() -> None:
 # --- config flow -------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("grid_stats")
 async def test_opower_with_disabled_date_sensors(
     hass: HomeAssistant, reload_opower: MagicMock
 ) -> None:
     await _energy_prefs(hass)
     opower = await _opower(hass, er.RegistryEntryDisabler.INTEGRATION)
 
-    result = await _start(hass)
-    assert result["step_id"] == "user"
-    assert _defaults(result) == {
-        "meter": "electric",
-        CONF_IMPORT_STAT: IMPORT,
-        CONF_EXPORT_STAT: EXPORT,
-    }
+    result = await _electric_flow(hass)
+    assert result["step_id"] == "electric"
+    assert _defaults(result) == {CONF_IMPORT_STAT: IMPORT, CONF_EXPORT_STAT: EXPORT}
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_IMPORT_STAT: IMPORT, CONF_EXPORT_STAT: EXPORT}
@@ -258,11 +276,12 @@ async def test_opower_with_disabled_date_sensors(
     reload_opower.assert_called_once_with(opower.entry_id)
 
 
+@pytest.mark.usefixtures("grid_stats")
 async def test_declining_the_date_sensors_goes_to_cycle(
     hass: HomeAssistant, reload_opower: MagicMock
 ) -> None:
     await _opower(hass, er.RegistryEntryDisabler.INTEGRATION)
-    result = await _start(hass)
+    result = await _electric_flow(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_IMPORT_STAT: IMPORT}
     )
@@ -284,13 +303,10 @@ async def test_declining_the_date_sensors_goes_to_cycle(
     reload_opower.assert_not_called()
 
 
+@pytest.mark.usefixtures("grid_stats")
 async def test_without_opower_grid_cycle_tariff(hass: HomeAssistant) -> None:
-    result = await _start(hass)
-    assert _defaults(result) == {
-        "meter": "electric",
-        CONF_IMPORT_STAT: None,
-        CONF_EXPORT_STAT: None,
-    }
+    result = await _electric_flow(hass)
+    assert _defaults(result) == {CONF_IMPORT_STAT: None, CONF_EXPORT_STAT: None}
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_IMPORT_STAT: IMPORT}
     )
@@ -321,9 +337,10 @@ async def test_without_opower_grid_cycle_tariff(hass: HomeAssistant) -> None:
     assert result["result"].unique_id == IMPORT
 
 
+@pytest.mark.usefixtures("grid_stats")
 async def test_skipping_utility_data_goes_to_cycle(hass: HomeAssistant) -> None:
     await _opower(hass, None)
-    result = await _start(hass)
+    result = await _electric_flow(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_IMPORT_STAT: IMPORT}
     )
@@ -336,11 +353,12 @@ async def test_skipping_utility_data_goes_to_cycle(hass: HomeAssistant) -> None:
     assert result["title"] == "Check My Bill"
 
 
+@pytest.mark.usefixtures("grid_stats")
 async def test_user_disabled_date_sensors_are_left_alone(
     hass: HomeAssistant, reload_opower: MagicMock
 ) -> None:
     await _opower(hass, er.RegistryEntryDisabler.USER)
-    result = await _start(hass)
+    result = await _electric_flow(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_IMPORT_STAT: IMPORT}
     )
@@ -352,10 +370,11 @@ async def test_user_disabled_date_sensors_are_left_alone(
     reload_opower.assert_not_called()
 
 
+@pytest.mark.usefixtures("grid_stats")
 async def test_duplicate_account_aborts(hass: HomeAssistant) -> None:
     await _opower(hass, None)
     MockConfigEntry(domain=DOMAIN, unique_id=CONSUMPTION, data={}).add_to_hass(hass)
-    result = await _start(hass)
+    result = await _electric_flow(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_IMPORT_STAT: IMPORT}
     )
@@ -386,6 +405,7 @@ def _entry(hass: HomeAssistant, **options: Any) -> MockConfigEntry:
     return entry
 
 
+@pytest.mark.usefixtures("grid_stats")
 async def test_reconfigure(hass: HomeAssistant) -> None:
     entry = _entry(hass)
     result = await entry.start_reconfigure_flow(hass)
@@ -410,6 +430,7 @@ async def test_reconfigure(hass: HomeAssistant) -> None:
     assert entry.unique_id == EXPORT
 
 
+@pytest.mark.usefixtures("grid_stats")
 async def test_reconfigure_onto_another_entrys_meter_aborts(hass: HomeAssistant) -> None:
     entry = _entry(hass)
     MockConfigEntry(domain=DOMAIN, unique_id=EXPORT, data={}).add_to_hass(hass)
@@ -606,25 +627,34 @@ async def test_gas_opower_account_and_forecast_unit(hass: HomeAssistant) -> None
     assert CONF_UTILITY_EXPORT_STAT not in result["data"]
 
 
-async def test_gas_statistic_rejected_for_electric(hass: HomeAssistant) -> None:
+@pytest.mark.usefixtures("grid_stats")
+async def test_electric_lists_only_electric_meters(hass: HomeAssistant) -> None:
+    await _opower(hass, None)
     await _meter_stat(hass, GAS_METER, "ft³")
-    result = await _start(hass)
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-    assert result["errors"] == {CONF_IMPORT_STAT: "import_required"}
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_IMPORT_STAT: GAS_METER}
-    )
-    assert result["errors"] == {"base": "not_an_electric_statistic"}
+    await _meter_stat(hass, "sensor.test_gas_therms", "thm")
+    await _meter_stat(hass, "sensor.test_power", "W")
+    result = await _electric_flow(hass)
+    # No gas, no power, and not the utility's own statistics.
+    assert _offered(result, CONF_IMPORT_STAT) == [EXPORT, IMPORT]
+    assert _offered(result, CONF_EXPORT_STAT) == [EXPORT, IMPORT]
 
 
-@pytest.mark.parametrize("unit", ["kWh", "W"])
-async def test_electric_statistic_rejected_for_gas(hass: HomeAssistant, unit: str) -> None:
-    await _meter_stat(hass, IMPORT, unit)
+async def test_gas_lists_only_gas_meters(hass: HomeAssistant) -> None:
+    await _opower(hass, None)
+    await _meter_stat(hass, IMPORT, "kWh")
+    await _meter_stat(hass, GAS_METER, "ft³")
+    await _meter_stat(hass, "sensor.test_gas_therms", "thm")
     result = await _gas_flow(hass)
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_IMPORT_STAT: IMPORT}
-    )
-    assert result["errors"] == {"base": "not_a_gas_statistic"}
+    assert _offered(result, CONF_IMPORT_STAT) == [GAS_METER, "sensor.test_gas_therms"]
+
+
+@pytest.mark.parametrize(("meter", "seeded"), [("electric", GAS_METER), ("gas", IMPORT)])
+async def test_no_fitting_statistic_aborts(hass: HomeAssistant, meter: str, seeded: str) -> None:
+    await _meter_stat(hass, seeded, "ft³" if seeded == GAS_METER else "kWh")
+    result = await _start(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_METER: meter})
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == f"no_{meter}_statistics"
 
 
 def _gas_entry(hass: HomeAssistant, **data: Any) -> MockConfigEntry:

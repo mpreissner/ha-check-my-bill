@@ -68,16 +68,17 @@ its own refactor, with no behaviour change, so the gas work does not mix with a 
 
 ### 2.1 Setup
 
-The first step gains a **Meter** choice, electric or gas, before the statistic pickers.
-Electric is the default and behaves exactly as today.
+The first step is only the **Meter** choice, electric or gas. Electric is the default
+and goes to the `electric` step (config-flow.md §2).
 
 For **gas**:
 
-- **user step**: one statistic, HA's gas consumption. There is no export statistic.
+- **gas step**: one statistic, HA's gas consumption. There is no export statistic.
   - It is pre-filled from the Energy dashboard's first `gas` source (`stat_energy_from`).
-  - Statistics with a volume unit (`m³`, `ft³`, `CCF`, `MCF`, `L`, `gal`) or in therms
-    (`thm`) are accepted. Gas is not measured in kWh, MJ or GJ, so those are rejected. Anything else is rejected with
-    `not_a_gas_statistic`.
+  - The dropdown lists only statistics with a volume unit (`m³`, `ft³`, `CCF`, `MCF`,
+    `L`, `gal`) or in therms (`thm`), leaving out Opower's. Gas is not measured in kWh,
+    MJ or GJ, so those are not offered. With none to offer, the flow aborts with
+    `no_gas_statistics`.
 - **utility step**: lists Opower **gas** accounts. These are statistics whose prefix
   holds `_gas_`, and their date sensors end in `_gas_start_date` and `_gas_end_date`. The
   discovery key includes the meter type, so an electric and a gas account with the same
@@ -229,7 +230,7 @@ Refactor (§1.1):
 
 `tests_ha/test_config_flow.py`:
 - The meter choice.
-- A gas statistic is rejected on an electric entry, and the reverse.
+- The electric step lists no gas statistics, and the gas step no electric ones.
 
 Card changes are checked by hand on the dev instance with a generated gas statistic. No
 real account IDs or readings go in fixtures.
