@@ -2,24 +2,22 @@
 
 Checks your electricity or gas bill against what your own meters recorded.
 
-Check My Bill reads the grid statistics already set up on the Energy dashboard, and, if you
-use the Opower integration, what your utility reports. For the current and past billing
+Check My Bill reads the meter statistics already set up on the Energy dashboard, and, if
+you use the Opower integration, what your utility reports. For the current and past billing
 cycles it shows:
 
-- the kWh your meter recorded next to the kWh the utility reported, and whether they agree
-  within a tolerance;
+- the usage your meter recorded next to the usage the utility reported, and whether they
+  agree within a tolerance;
 - what the bill should cost at your rates;
 - a projection of the current cycle's cost.
 
-> [!WARNING]
-> **Beta.** This is a pre-release (`0.1.0b5`). Expect rough edges, and check the numbers
-> against a real bill before relying on them. Please report problems in
-> [Issues](https://github.com/mpreissner/ha-check-my-bill/issues).
+Check the numbers against a real bill before relying on them, and please report problems
+in [Issues](https://github.com/mpreissner/ha-check-my-bill/issues).
 
 ## Requirements
 
 - Home Assistant 2026.8 or newer.
-- Grid consumption configured on the Energy dashboard.
+- Grid or gas consumption configured on the Energy dashboard.
 - Optional: the [Opower](https://www.home-assistant.io/integrations/opower/) integration
   for your utility. Without it, cycles are still costed, but there is nothing to check
   them against.
@@ -28,9 +26,7 @@ cycles it shows:
 
 1. In HACS, open the ⋮ menu → **Custom repositories**.
 2. Add `https://github.com/mpreissner/ha-check-my-bill` with the type **Integration**.
-3. Open **Check My Bill** in HACS and download it. Only pre-releases exist so far: if HACS
-   offers no version, or not the newest one, turn on **Show beta versions** for the
-   repository (⋮ → **Redownload**) and pick it there.
+3. Open **Check My Bill** in HACS and download it.
 4. Restart Home Assistant.
 5. Go to **Settings → Devices & services → Add integration → Check My Bill**.
 
@@ -42,14 +38,14 @@ To install by hand, copy `custom_components/check_my_bill` into your configurati
 The setup steps are:
 
 1. **Meter.** Electric or gas. The next page lists only the statistics that fit it.
-2. **Grid statistics.** These are the import and export statistics, filled in from the
-   Energy dashboard. Only energy statistics are listed.
+2. **Statistics.** For electric, the grid import and optional export statistics; for gas,
+   the gas consumption statistic. They are filled in from the Energy dashboard.
 3. **Utility account.** Pick the Opower account to compare against, or **Don't use utility
    data**. With Opower, the billing dates come from the utility.
 4. **Billing cycle.** Asked only when no utility dates are available. Enter the day of the
    month your meter is read, or the end date of your last bill.
-5. **Rates.** Supply and delivery per kWh, fixed charges, tax, and how exported energy is
-   billed. Leave the rates empty to compare kWh only.
+5. **Rates.** Supply and delivery per kWh (or per billing unit for gas), fixed charges,
+   tax, and how exported energy is billed. Leave the rates empty to compare usage only.
 
 Under **Configure** on the integration you can change:
 
@@ -91,15 +87,16 @@ entry_id: ...         # only needed with more than one Check My Bill entry
 
 It shows:
 
-- **Current cycle:** your kWh, the utility's kWh, the cost so far and the projected cost.
+- **Current cycle:** your usage, the utility's usage, the cost so far and the projected
+  cost.
 - **Past cycles:** a table with a status for each cycle. Click a row to see its cost
-  breakdown and the kWh range the utility should be within.
+  breakdown and the usage range the utility should be within.
 
 ### Sensors
 
 | Sensor | |
 |---|---|
-| Cycle grid import | kWh imported this cycle |
+| Cycle grid import | Usage this cycle, in kWh or the gas billing unit |
 | Cycle expected cost | Cost so far this cycle |
 | Cycle projected cost | Projected cost for the whole cycle |
 | Cycle status | `ok`, `warn`, `mismatch`, `no_data` or `in_progress` |
@@ -109,7 +106,7 @@ It shows:
 ### Past cycles
 
 - **Opower bill dates:** with Opower, past cycles use your actual bill dates and the
-  billed kWh and cost, refreshed once a day.
+  billed usage and cost, refreshed once a day.
 - **Estimated cycles:** otherwise, cycles before installation are estimated by stepping
   back whole months, and are marked "est.".
 - **Correcting a cycle:** fix an estimated cycle with the **Set cycle dates** action.
@@ -130,7 +127,6 @@ You get a repair issue when:
   Assistant update changes them, Check My Bill falls back to estimated dates and logs a
   warning.
 - Opower's billed cost may leave out taxes and fees, depending on the utility.
-- Electricity only, for now.
 - No diagnostics download yet.
 
 ## Development
