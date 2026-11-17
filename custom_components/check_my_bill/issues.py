@@ -14,6 +14,8 @@ from .stats import StatIds
 
 EXPORT_DETECTED = "export_detected"
 MISSING_STATISTIC = "missing_statistic"
+UNIT_CHANGED = "unit_changed"
+"""Raised by the coordinator when a statistic's unit differs from the stored one."""
 EXPORT_THRESHOLD = 0.1
 """Utility-recorded export above this, in one cycle, raises the export issue."""
 
@@ -33,6 +35,11 @@ def _set(hass: HomeAssistant, kind: str, entry: ConfigEntry, placeholders: dict[
         translation_key=kind,
         translation_placeholders={"title": entry.title, **placeholders},
     )
+
+
+def async_unit_changed(hass: HomeAssistant, entry: ConfigEntry, changed: list[str]) -> None:
+    """Raise the unit-changed issue for the statistics in ``changed``."""
+    _set(hass, UNIT_CHANGED, entry, {"statistics": ", ".join(sorted(changed))})
 
 
 def utility_records_export(
@@ -68,5 +75,5 @@ async def async_check(
 
 def async_clear(hass: HomeAssistant, entry_id: str) -> None:
     """Delete the entry's issues, when it is unloaded or removed."""
-    for kind in (EXPORT_DETECTED, MISSING_STATISTIC):
+    for kind in (EXPORT_DETECTED, MISSING_STATISTIC, UNIT_CHANGED):
         ir.async_delete_issue(hass, DOMAIN, issue_id(kind, entry_id))

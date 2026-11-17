@@ -2,19 +2,32 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Literal
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.core import HomeAssistant
+from homeassistant.util.unit_conversion import EnergyConverter, VolumeConverter
 
 from .core.compute import CycleTotals, compute_totals, hour_starts
 from .core.cycles import Cycle
+from .core.units import UnitClass
 
 type Changes = dict[str, dict[datetime, float]]
+
+
+def _ratio(converter: type[EnergyConverter | VolumeConverter]) -> UnitClass:
+    return UnitClass(
+        frozenset(str(u) for u in converter.VALID_UNITS if u is not None),
+        lambda a, b: converter.converter_factory(a, b)(1.0),
+    )
+
+
+VOLUME = _ratio(VolumeConverter)
+ENERGY = _ratio(EnergyConverter)
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,10 +38,21 @@ class StatIds:
     exports: str | None = None
     utility: str | None = None
     utility_exports: str | None = None
+    scale: Mapping[str, float] = field(default_factory=dict, compare=False)
+    """Factor from each statistic's own unit to the billing unit; 1.0 when absent."""
 
     def configured(self) -> set[str]:
         """Every configured ID."""
         return {s for s in (self.imports, self.exports, self.utility, self.utility_exports) if s}
+
+    def sources(self) -> dict[str, str | None]:
+        """The IDs by role, as the Store records them."""
+        return {
+            "imports": self.imports,
+            "exports": self.exports,
+            "utility": self.utility,
+            "utility_exports": self.utility_exports,
+        }
 
 
 def _as_utc(value: float | datetime) -> datetime:
@@ -43,9 +67,15 @@ async def fetch_changes(
     start: datetime,
     end: datetime,
     period: Literal["hour", "day"],
+    scale: Mapping[str, float] | None = None,
 ) -> Changes:
-    """``change`` per slot start (UTC) for each ID, in kWh. Missing slots are absent."""
+    """``change`` per slot start (UTC) for each ID, in the billing unit.
+
+    Rows are read in each statistic's own unit and multiplied by its ``scale``.
+    Missing slots are absent.
+    """
     wanted = set(ids)
+    scale = scale or {}
     rows = await get_instance(hass).async_add_executor_job(
         statistics_during_period,
         hass,
@@ -53,16 +83,17 @@ async def fetch_changes(
         end,
         wanted,
         period,
-        {"energy": "kWh"},
+        None,
         {"change"},
     )
     result: Changes = {}
     for statistic_id in wanted:
+        factor = scale.get(statistic_id, 1.0)
         series: dict[datetime, float] = {}
         for row in rows.get(statistic_id, []):
             change = row.get("change")
             if change is not None:
-                series[_as_utc(row["start"])] = float(change)
+                series[_as_utc(row["start"])] = float(change) * factor
         result[statistic_id] = series
     return result
 
@@ -110,8 +141,12 @@ async def cycle_totals(
     cycle: Cycle,
     tz: tzinfo,
     until: datetime | None = None,
+    *,
+    daily_only: bool = False,
 ) -> CycleTotals:
     """Totals for ``cycle``, or for its part before ``until`` while it is open.
+
+    ``daily_only`` (gas) reads day slots only, for the open cycle too.
 
     Hourly data is preferred. For a closed cycle with many gaps, daily buckets are tried too:
     Opower imports older history as one row per day, which hourly slots cannot cover.
@@ -123,15 +158,24 @@ async def cycle_totals(
     if until is not None and not closed:
         end = max(start, until)
 
+    async def daily_totals() -> CycleTotals:
+        changes = await fetch_changes(hass, ids.configured(), start, end, "day", ids.scale)
+        return _totals(ids, day_starts(start, end), changes, hourly=False)
+
+    if daily_only:
+        return await daily_totals()
+
     slots = hour_starts(start, end)
     hourly = _totals(
-        ids, slots, await fetch_changes(hass, ids.configured(), start, end, "hour"), hourly=True
+        ids,
+        slots,
+        await fetch_changes(hass, ids.configured(), start, end, "hour", ids.scale),
+        hourly=True,
     )
     if not closed or not slots or _min_coverage(hourly) >= HOURLY_ENOUGH:
         return hourly
 
-    daily_changes = await fetch_changes(hass, ids.configured(), start, end, "day")
-    daily = _totals(ids, day_starts(start, end), daily_changes, hourly=False)
+    daily = await daily_totals()
     return daily if _min_coverage(daily) > _min_coverage(hourly) else hourly
 
 

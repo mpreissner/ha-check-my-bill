@@ -2,15 +2,26 @@
   "config": {
     "step": {
       "user": {
-        "title": "Grid statistics",
-        "description": "The statistics that measure energy from and to the grid. They default to the Energy dashboard's grid source.",
+        "title": "Meter",
+        "description": "Choose what to check. For electricity, pick the statistics that measure energy from and to the grid; they default to the Energy dashboard's grid source. For gas, the statistic is chosen on the next page.",
         "data": {
+          "meter": "Meter",
           "import_stat": "Grid import",
           "export_stat": "Grid export"
         },
         "data_description": {
           "import_stat": "Cumulative kWh imported from the grid.",
           "export_stat": "Cumulative kWh exported to the grid, if you have solar or storage."
+        }
+      },
+      "gas": {
+        "title": "Gas statistic",
+        "description": "The statistic that measures your gas consumption. It defaults to the Energy dashboard's first gas source.",
+        "data": {
+          "import_stat": "Gas consumption"
+        },
+        "data_description": {
+          "import_stat": "Cumulative gas use, in a volume (ft³, m³, CCF) or therms."
         }
       },
       "utility": {
@@ -24,6 +35,18 @@
           "enable_date_sensors": "Opower disables its current-bill start and end date sensors by default. Enabling them lets cycles follow your real meter reads."
         }
       },
+      "units": {
+        "title": "Units",
+        "description": "Quantities, rates and sensors all use the unit your gas bill charges by. A CCF counts as one therm.",
+        "data": {
+          "unit": "Billing unit",
+          "utility_unit": "Utility data unit"
+        },
+        "data_description": {
+          "unit": "What unit does your gas bill charge by?",
+          "utility_unit": "The unit of your utility's usage data. Opower labels all gas data CCF; this was read from your account, so correct it only if your bill disagrees."
+        }
+      },
       "cycle": {
         "title": "Billing cycle",
         "description": "Enter the day of the month your meter is read, or the end date of your last bill. Fill in one of them.",
@@ -34,7 +57,7 @@
       },
       "tariff": {
         "title": "Rates",
-        "description": "Your current rates. Leave both rates empty to check kWh only; you can add rates later.",
+        "description": "Your current rates. Leave both rates empty to check quantities only; you can add rates later.",
         "data": {
           "supply": "Supply rate",
           "delivery": "Delivery rate",
@@ -45,10 +68,10 @@
           "export_mode": "Export billing"
         },
         "data_description": {
-          "supply": "Generation/supply charge per kWh. Leave both rates empty to check kWh only.",
-          "delivery": "Distribution/delivery charge per kWh.",
+          "supply": "Generation/supply charge per billed unit. Leave both rates empty to check quantities only.",
+          "delivery": "Distribution/delivery charge per billed unit.",
           "tax_pct": "Percent added to the whole bill.",
-          "export_rate": "Credit per exported kWh, used with the separate-rate export mode."
+          "export_rate": "Credit per exported unit, used with the separate-rate export mode."
         }
       },
       "reconfigure": {
@@ -61,10 +84,13 @@
           "utility_export_stat": "Utility return",
           "cycle_start_entity": "Bill start date sensor",
           "cycle_end_entity": "Bill end date sensor",
-          "cycle_day": "Meter-read day"
+          "cycle_day": "Meter-read day",
+          "unit": "Billing unit",
+          "utility_unit": "Utility data unit"
         },
         "data_description": {
-          "cycle_day": "Used only when the date sensors are not set."
+          "cycle_day": "Used only when the date sensors are not set.",
+          "unit": "Gas only. Changing it converts the stored history to the new unit."
         }
       }
     },
@@ -72,7 +98,10 @@
       "cycle_one": "Enter either the meter-read day or the last bill end date.",
       "cycle_pair": "Set both billing-date sensors, or neither.",
       "rates_both": "Enter both the supply and the delivery rate.",
-      "invalid_tariff": "The rates could not be read. Check the values and their format."
+      "invalid_tariff": "The rates could not be read. Check the values and their format.",
+      "import_required": "Choose the grid import statistic.",
+      "not_a_gas_statistic": "This statistic is not in a gas unit: a volume such as ft³, m³ or CCF, or therms.",
+      "not_an_electric_statistic": "This statistic is in a gas unit. To check gas, choose the gas meter instead."
     },
     "abort": {
       "already_configured": "This meter is already being checked.",
@@ -102,10 +131,10 @@
           "export_rate": "Export credit rate"
         },
         "data_description": {
-          "supply": "Generation/supply charge per kWh. Leave both rates empty to check kWh only.",
-          "delivery": "Distribution/delivery charge per kWh.",
+          "supply": "Generation/supply charge per billed unit. Leave both rates empty to check quantities only.",
+          "delivery": "Distribution/delivery charge per billed unit.",
           "tax_pct": "Percent added to the whole bill.",
-          "export_rate": "Credit per exported kWh, used with the separate-rate export mode."
+          "export_rate": "Credit per exported unit, used with the separate-rate export mode."
         }
       },
       "rate_versions": {
@@ -122,7 +151,7 @@
           "export_mode": "Export billing"
         },
         "data_description": {
-          "tolerance": "How far the metered and utility kWh can differ before a cycle is flagged."
+          "tolerance": "How far the metered and utility quantities can differ before a cycle is flagged."
         }
       }
     },
@@ -132,6 +161,12 @@
     }
   },
   "selector": {
+    "meter": {
+      "options": {
+        "electric": "Electricity",
+        "gas": "Gas"
+      }
+    },
     "export_mode": {
       "options": {
         "none": "Not billed",
@@ -240,6 +275,10 @@
     "missing_statistic": {
       "title": "A statistic used by Check My Bill is missing",
       "description": "{title} uses statistics that no longer exist: {statistics}. This can happen after the utility integration is re-authenticated. Choose the new statistics with **Reconfigure** on the integration's entry."
+    },
+    "unit_changed": {
+      "title": "A statistic used by Check My Bill changed its unit",
+      "description": "{title} reads statistics whose unit has changed: {statistics}. They are now converted from the new unit. Check that past cycles still look right, and use the recompute action if not."
     }
   }
 }

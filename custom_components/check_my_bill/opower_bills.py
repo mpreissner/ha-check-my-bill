@@ -33,7 +33,8 @@ def _prefix(api: Any, account: Any) -> str:
     return raw.replace("-", "_").lower()
 
 
-def _find_account(hass: HomeAssistant, prefix: str) -> tuple[Any, Any] | None:
+def _find_account(hass: HomeAssistant, prefix: str) -> tuple[Any, Any, Any] | None:
+    """The API client, the account, and the coordinator's data value for it."""
     for entry in hass.config_entries.async_entries(OPOWER):
         if entry.state is not ConfigEntryState.LOADED:
             continue
@@ -46,10 +47,36 @@ def _find_account(hass: HomeAssistant, prefix: str) -> tuple[Any, Any] | None:
             account = getattr(value, "account", None)
             try:
                 if account is not None and _prefix(api, account) == prefix:
-                    return api, account
+                    return api, account, value
             except AttributeError, TypeError:
                 continue
     return None
+
+
+def _stat_prefix(utility_stat: str | None) -> str | None:
+    if not utility_stat or not utility_stat.startswith(f"{OPOWER}:"):
+        return None
+    if not utility_stat.endswith(CONSUMPTION):
+        return None
+    return utility_stat.removeprefix(f"{OPOWER}:").removesuffix(CONSUMPTION)
+
+
+_FORECAST_UNITS = {"KWH": "kWh", "THERM": "thm", "CCF": "CCF"}
+
+
+def account_unit(hass: HomeAssistant, utility_stat: str | None) -> str | None:
+    """The account's real unit from the Opower forecast, e.g. ``thm``; None if unknown.
+
+    The Opower integration labels every gas statistic CCF, even when the utility's data
+    is in therms (docs/specs/gas.md §2.1).
+    """
+    if (prefix := _stat_prefix(utility_stat)) is None:
+        return None
+    if (found := _find_account(hass, prefix)) is None:
+        return None
+    forecast = getattr(found[2], "forecast", None)
+    unit = getattr(getattr(forecast, "unit_of_measure", None), "name", None)
+    return _FORECAST_UNITS.get(unit) if isinstance(unit, str) else None
 
 
 async def async_fetch_bills(
@@ -59,17 +86,14 @@ async def async_fetch_bills(
 
     Raises :class:`BillFetchError` if the account was found but the call failed.
     """
-    if not utility_stat or not utility_stat.startswith(f"{OPOWER}:"):
+    if (prefix := _stat_prefix(utility_stat)) is None:
         return None
-    if not utility_stat.endswith(CONSUMPTION):
-        return None
-    prefix = utility_stat.removeprefix(f"{OPOWER}:").removesuffix(CONSUMPTION)
 
     found = _find_account(hass, prefix)
     if found is None:
         _LOGGER.debug("No loaded Opower account for %s", utility_stat)
         return None
-    api, account = found
+    api, account, _ = found
 
     try:
         from opower import AggregateType

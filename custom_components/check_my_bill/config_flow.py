@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.components.recorder.statistics import async_list_statistic_ids
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -38,18 +39,26 @@ from .const import (
     CONF_EXPORT_MODE,
     CONF_EXPORT_STAT,
     CONF_IMPORT_STAT,
+    CONF_METER,
     CONF_TARIFF,
     CONF_TOLERANCE,
+    CONF_UNIT,
     CONF_UTILITY_EXPORT_STAT,
     CONF_UTILITY_IMPORT_STAT,
+    CONF_UTILITY_UNIT,
+    DEFAULT_GAS_TOLERANCE_PCT,
     DEFAULT_TOLERANCE_PCT,
     DOMAIN,
 )
 from .core.serde import tariff_from_options, version_from_dict, version_to_dict
 from .core.tariff import ExportMode, RateSpec, TariffVersion
-from .discovery import OpowerAccount, grid_statistics, opower_accounts
+from .core.units import CCF, KWH, THERM, Meter
+from .discovery import OpowerAccount, gas_statistics, grid_statistics, opower_accounts
+from .opower_bills import account_unit
+from .stats import VOLUME
 
 TITLE = "Check My Bill"
+GAS_TITLE = "Check My Bill \u2013 Gas"
 NO_UTILITY = "none"
 
 CONF_ACCOUNT = "account"
@@ -88,14 +97,40 @@ def _money(unit: str) -> NumberSelector:
     )
 
 
-_FIELD_SELECTORS = {
-    "supply": _money("$/kWh"),
-    "delivery": _money("$/kWh"),
-    "fixed_monthly": _money("$"),
-    "fixed_daily": _money("$"),
-    "tax_pct": _money("%"),
-    "export_rate": _money("$/kWh"),
+GAS_UNITS = (THERM, CCF, "m³")
+"""Billing units offered for gas, the default first."""
+_METER = SelectSelector(
+    SelectSelectorConfig(
+        options=[m.value for m in Meter],
+        mode=SelectSelectorMode.LIST,
+        translation_key=CONF_METER,
+    )
+)
+_UNIT_LABELS = {
+    THERM: "Therms (thm)",
+    CCF: "Hundred cubic feet (CCF)",
+    "m³": "Cubic meters (m³)",
 }
+_GAS_UNIT = SelectSelector(
+    SelectSelectorConfig(
+        options=[SelectOptionDict(value=u, label=_UNIT_LABELS[u]) for u in GAS_UNITS],
+        mode=SelectSelectorMode.DROPDOWN,
+    )
+)
+
+
+def _field_selectors(unit: str, *, exports: bool) -> dict[str, NumberSelector]:
+    """The rate form's fields, labelled per billing ``unit``."""
+    fields = {
+        "supply": _money(f"$/{unit}"),
+        "delivery": _money(f"$/{unit}"),
+        "fixed_monthly": _money("$"),
+        "fixed_daily": _money("$"),
+        "tax_pct": _money("%"),
+    }
+    if exports:
+        fields["export_rate"] = _money(f"$/{unit}")
+    return fields
 
 
 def _suggested(key: str, value: Any, *, required: bool = False) -> vol.Marker:
@@ -106,9 +141,15 @@ def _suggested(key: str, value: Any, *, required: bool = False) -> vol.Marker:
     return marker(key, description={"suggested_value": value})
 
 
-def _rates_schema(prefill: dict[str, Any], *, extra: dict[Any, Any] | None = None) -> vol.Schema:
+def _rates_schema(
+    prefill: dict[str, Any],
+    *,
+    unit: str = KWH,
+    exports: bool = True,
+    extra: dict[Any, Any] | None = None,
+) -> vol.Schema:
     fields: dict[Any, Any] = dict(extra or {})
-    for key, selector in _FIELD_SELECTORS.items():
+    for key, selector in _field_selectors(unit, exports=exports).items():
         fields[_suggested(key, prefill.get(key))] = selector
     return vol.Schema(fields)
 
@@ -162,6 +203,36 @@ def _account_label(account: OpowerAccount) -> str:
     return f"{account.title}: {account.consumption_stat}"
 
 
+async def _stat_units(hass: Any, statistic_ids: list[str | None]) -> dict[str, str | None]:
+    """Each listed statistic's unit; statistics the recorder does not know are absent."""
+    wanted = {s for s in statistic_ids if s}
+    if not wanted:
+        return {}
+    listed = await async_list_statistic_ids(hass, statistic_ids=wanted)
+    return {s["statistic_id"]: s.get("statistics_unit_of_measurement") for s in listed}
+
+
+def _is_gas_unit(unit: str | None) -> bool:
+    """A unit gas is measured in: a volume, or therms."""
+    return unit is not None and (unit in VOLUME.units or unit == THERM)
+
+
+async def _gas_error(hass: Any, statistic_id: str) -> str | None:
+    units = await _stat_units(hass, [statistic_id])
+    return None if _is_gas_unit(units.get(statistic_id)) else "not_a_gas_statistic"
+
+
+async def _electric_error(hass: Any, statistic_ids: list[str | None]) -> str | None:
+    units = await _stat_units(hass, statistic_ids)
+    if any(_is_gas_unit(u) for u in units.values()):
+        return "not_an_electric_statistic"
+    return None
+
+
+def _meter(data: Any) -> Meter:
+    return Meter(data.get(CONF_METER, Meter.ELECTRIC))
+
+
 class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
     """Grid -> utility -> (cycle) -> tariff."""
 
@@ -179,26 +250,71 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
         """Rates and settings."""
         return CheckMyBillOptionsFlow()
 
+    @property
+    def _gas(self) -> bool:
+        return self._data.get(CONF_METER) == Meter.GAS
+
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Grid import and export statistics, pre-filled from the Energy dashboard."""
+        """Meter type, then the grid statistics pre-filled from the Energy dashboard."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            self._data[CONF_IMPORT_STAT] = user_input[CONF_IMPORT_STAT]
-            if export := user_input.get(CONF_EXPORT_STAT):
-                self._data[CONF_EXPORT_STAT] = export
-            self._accounts = await opower_accounts(self.hass)
-            if self._accounts:
-                return await self.async_step_utility()
-            return await self.async_step_cycle()
+            if Meter(user_input.get(CONF_METER, Meter.ELECTRIC)) is Meter.GAS:
+                self._data = {CONF_METER: Meter.GAS.value}
+                return await self.async_step_gas()
+            imports = user_input.get(CONF_IMPORT_STAT)
+            export = user_input.get(CONF_EXPORT_STAT)
+            if not imports:
+                errors[CONF_IMPORT_STAT] = "import_required"
+            elif error := await _electric_error(self.hass, [imports, export]):
+                errors["base"] = error
+            else:
+                # Electric entries carry no meter or unit: absent means electric, kWh.
+                self._data = {CONF_IMPORT_STAT: imports}
+                if export:
+                    self._data[CONF_EXPORT_STAT] = export
+                return await self._async_step_accounts()
 
         pairs = await grid_statistics(self.hass)
         first = pairs[0] if pairs else None
         schema = vol.Schema(
             {
-                _suggested(CONF_IMPORT_STAT, first and first.import_stat, required=True): _STAT,
+                vol.Required(CONF_METER, default=Meter.ELECTRIC.value): _METER,
+                _suggested(CONF_IMPORT_STAT, first and first.import_stat): _STAT,
                 _suggested(CONF_EXPORT_STAT, first and first.export_stat): _STAT,
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema)
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+
+    async def async_step_gas(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """The gas consumption statistic, pre-filled from the Energy dashboard."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            imports = user_input[CONF_IMPORT_STAT]
+            if error := await _gas_error(self.hass, imports):
+                errors["base"] = error
+            else:
+                self._data[CONF_IMPORT_STAT] = imports
+                return await self._async_step_accounts()
+
+        sources = await gas_statistics(self.hass)
+        schema = vol.Schema(
+            {_suggested(CONF_IMPORT_STAT, sources[0] if sources else None, required=True): _STAT}
+        )
+        return self.async_show_form(step_id="gas", data_schema=schema, errors=errors)
+
+    async def _async_step_accounts(self) -> ConfigFlowResult:
+        self._accounts = await opower_accounts(self.hass, _meter(self._data))
+        if self._accounts:
+            return await self.async_step_utility()
+        return await self._async_step_after_utility()
+
+    async def _async_step_after_utility(self) -> ConfigFlowResult:
+        """Units for gas; then the cycle unless the date sensors give it."""
+        if self._gas and CONF_UNIT not in self._data:
+            return await self.async_step_units()
+        if CONF_CYCLE_START_ENTITY in self._data:
+            return await self.async_step_tariff()
+        return await self.async_step_cycle()
 
     def _disabled_by_integration(self, account: OpowerAccount) -> list[str]:
         registry = er.async_get(self.hass)
@@ -228,7 +344,7 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
             choice = user_input[CONF_ACCOUNT]
             account = next((a for a in self._accounts if a.consumption_stat == choice), None)
             if account is None:
-                return await self.async_step_cycle()
+                return await self._async_step_after_utility()
             self._account = account
             self._data[CONF_UTILITY_IMPORT_STAT] = account.consumption_stat
             if account.return_stat:
@@ -247,11 +363,10 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._reload_opower = account.config_entry_id
                 else:
                     usable = False
-            if not usable:
-                return await self.async_step_cycle()
-            self._data[CONF_CYCLE_START_ENTITY] = account.start_entity
-            self._data[CONF_CYCLE_END_ENTITY] = account.end_entity
-            return await self.async_step_tariff()
+            if usable:
+                self._data[CONF_CYCLE_START_ENTITY] = account.start_entity
+                self._data[CONF_CYCLE_END_ENTITY] = account.end_entity
+            return await self._async_step_after_utility()
 
         options = [
             SelectOptionDict(value=a.consumption_stat, label=_account_label(a))
@@ -270,6 +385,23 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
         if any(self._disabled_by_integration(a) for a in self._accounts):
             fields[vol.Required(CONF_ENABLE_DATE_SENSORS, default=True)] = BooleanSelector()
         return self.async_show_form(step_id="utility", data_schema=vol.Schema(fields))
+
+    async def async_step_units(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Gas: the billing unit, and the utility statistic's real unit (gas.md §2.1)."""
+        utility = self._data.get(CONF_UTILITY_IMPORT_STAT)
+        if user_input is not None:
+            self._data[CONF_UNIT] = user_input[CONF_UNIT]
+            if utility and (utility_unit := user_input.get(CONF_UTILITY_UNIT)):
+                self._data[CONF_UTILITY_UNIT] = utility_unit
+            return await self._async_step_after_utility()
+
+        fields: dict[Any, Any] = {vol.Required(CONF_UNIT, default=THERM): _GAS_UNIT}
+        if utility:
+            guess = account_unit(self.hass, utility)
+            if guess is None:
+                guess = (await _stat_units(self.hass, [utility])).get(utility)
+            fields[vol.Required(CONF_UTILITY_UNIT, default=guess or CCF)] = _GAS_UNIT
+        return self.async_show_form(step_id="units", data_schema=vol.Schema(fields))
 
     async def async_step_cycle(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manual cycle: the meter-read day, or the last bill's end date."""
@@ -291,7 +423,7 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(step_id="cycle", data_schema=schema, errors=errors)
 
     async def async_step_tariff(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Rates; leaving them empty validates kWh only."""
+        """Rates; leaving them empty validates quantities only."""
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
@@ -299,14 +431,22 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
             except ValueError as err:
                 errors["base"] = str(err) if str(err) == "rates_both" else "invalid_tariff"
             else:
+                export_mode = (
+                    ExportMode.NONE
+                    if self._gas
+                    else user_input.get(CONF_EXPORT_MODE, ExportMode.NONE)
+                )
                 return await self._async_create(
-                    tariff=[version] if version else [],
-                    export_mode=user_input.get(CONF_EXPORT_MODE, ExportMode.NONE),
+                    tariff=[version] if version else [], export_mode=export_mode
                 )
 
+        extra = (
+            {}
+            if self._gas
+            else {vol.Required(CONF_EXPORT_MODE, default=ExportMode.NONE.value): _EXPORT_MODE}
+        )
         schema = _rates_schema(
-            {},
-            extra={vol.Required(CONF_EXPORT_MODE, default=ExportMode.NONE.value): _EXPORT_MODE},
+            {}, unit=self._data.get(CONF_UNIT, KWH), exports=not self._gas, extra=extra
         )
         return self.async_show_form(step_id="tariff", data_schema=schema, errors=errors)
 
@@ -318,14 +458,15 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
         if self._reload_opower:
             self.hass.config_entries.async_schedule_reload(self._reload_opower)
-        title = f"{TITLE} ({self._account.title})" if self._account else TITLE
+        base = GAS_TITLE if self._gas else TITLE
+        title = f"{base} ({self._account.title})" if self._account else base
         return self.async_create_entry(
             title=title,
             data=self._data,
             options={
                 CONF_TARIFF: tariff,
                 CONF_EXPORT_MODE: export_mode,
-                CONF_TOLERANCE: DEFAULT_TOLERANCE_PCT,
+                CONF_TOLERANCE: DEFAULT_GAS_TOLERANCE_PCT if self._gas else DEFAULT_TOLERANCE_PCT,
             },
         )
 
@@ -336,6 +477,7 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
         current = dict(entry.data)
+        gas = _meter(entry.data) is Meter.GAS
         if user_input is not None:
             start = user_input.get(CONF_CYCLE_START_ENTITY)
             end = user_input.get(CONF_CYCLE_END_ENTITY)
@@ -343,8 +485,25 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cycle_pair"
             elif not start and user_input.get(CONF_CYCLE_DAY) is None:
                 errors["base"] = "cycle_one"
+            elif error := (
+                await _gas_error(self.hass, user_input[CONF_IMPORT_STAT])
+                if gas
+                else await _electric_error(
+                    self.hass,
+                    [user_input[CONF_IMPORT_STAT], user_input.get(CONF_EXPORT_STAT)],
+                )
+            ):
+                errors["base"] = error
             else:
-                data = {k: v for k, v in user_input.items() if v not in (None, "")}
+                # The meter type and setup-time units are kept; gas.md §2.3.
+                kept = {
+                    k: entry.data[k]
+                    for k in (CONF_METER, CONF_UNIT, CONF_UTILITY_UNIT)
+                    if k in entry.data
+                }
+                data = {**kept, **{k: v for k, v in user_input.items() if v not in (None, "")}}
+                if not data.get(CONF_UTILITY_IMPORT_STAT):
+                    data.pop(CONF_UTILITY_UNIT, None)
                 if CONF_CYCLE_DAY in data:
                     data[CONF_CYCLE_DAY] = int(data[CONF_CYCLE_DAY])
                 unique_id = data.get(CONF_UTILITY_IMPORT_STAT) or data[CONF_IMPORT_STAT]
@@ -357,18 +516,25 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_update_reload_and_abort(entry, unique_id=unique_id, data=data)
             current = user_input
 
-        schema = vol.Schema(
-            {
-                _suggested(CONF_IMPORT_STAT, current.get(CONF_IMPORT_STAT), required=True): _STAT,
-                _suggested(CONF_EXPORT_STAT, current.get(CONF_EXPORT_STAT)): _STAT,
-                _suggested(CONF_UTILITY_IMPORT_STAT, current.get(CONF_UTILITY_IMPORT_STAT)): _STAT,
-                _suggested(CONF_UTILITY_EXPORT_STAT, current.get(CONF_UTILITY_EXPORT_STAT)): _STAT,
-                _suggested(CONF_CYCLE_START_ENTITY, current.get(CONF_CYCLE_START_ENTITY)): _SENSOR,
-                _suggested(CONF_CYCLE_END_ENTITY, current.get(CONF_CYCLE_END_ENTITY)): _SENSOR,
-                _suggested(CONF_CYCLE_DAY, current.get(CONF_CYCLE_DAY)): _CYCLE_DAY,
-            }
+        fields: dict[Any, Any] = {
+            _suggested(CONF_IMPORT_STAT, current.get(CONF_IMPORT_STAT), required=True): _STAT,
+        }
+        if not gas:
+            fields[_suggested(CONF_EXPORT_STAT, current.get(CONF_EXPORT_STAT))] = _STAT
+        fields[_suggested(CONF_UTILITY_IMPORT_STAT, current.get(CONF_UTILITY_IMPORT_STAT))] = _STAT
+        if not gas:
+            fields[_suggested(CONF_UTILITY_EXPORT_STAT, current.get(CONF_UTILITY_EXPORT_STAT))] = (
+                _STAT
+            )
+        fields[_suggested(CONF_CYCLE_START_ENTITY, current.get(CONF_CYCLE_START_ENTITY))] = _SENSOR
+        fields[_suggested(CONF_CYCLE_END_ENTITY, current.get(CONF_CYCLE_END_ENTITY))] = _SENSOR
+        fields[_suggested(CONF_CYCLE_DAY, current.get(CONF_CYCLE_DAY))] = _CYCLE_DAY
+        if gas:
+            fields[vol.Required(CONF_UNIT, default=current.get(CONF_UNIT, THERM))] = _GAS_UNIT
+            fields[_suggested(CONF_UTILITY_UNIT, current.get(CONF_UTILITY_UNIT))] = _GAS_UNIT
+        return self.async_show_form(
+            step_id="reconfigure", data_schema=vol.Schema(fields), errors=errors
         )
-        return self.async_show_form(step_id="reconfigure", data_schema=schema, errors=errors)
 
 
 class CheckMyBillOptionsFlow(OptionsFlow):
@@ -393,7 +559,13 @@ class CheckMyBillOptionsFlow(OptionsFlow):
                 versions.append(raw)
         return versions
 
+    @property
+    def _gas(self) -> bool:
+        return _meter(self.config_entry.data) is Meter.GAS
+
     def _export_mode(self) -> str:
+        if self._gas:
+            return ExportMode.NONE.value
         return self.config_entry.options.get(CONF_EXPORT_MODE) or ExportMode.NONE.value
 
     async def async_step_rates(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -424,6 +596,8 @@ class CheckMyBillOptionsFlow(OptionsFlow):
 
         schema = _rates_schema(
             _prefill_from(base),
+            unit=self.config_entry.data.get(CONF_UNIT, KWH),
+            exports=not self._gas,
             extra={
                 vol.Required(CONF_EFFECTIVE_FROM, default=dt_util.now().date().isoformat()): _DATE
             },
@@ -453,21 +627,19 @@ class CheckMyBillOptionsFlow(OptionsFlow):
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Tolerance and export mode."""
+        """Tolerance, and the export mode for electric."""
         if user_input is not None:
-            return self._save(
-                **{
-                    CONF_TOLERANCE: float(user_input[CONF_TOLERANCE]),
-                    CONF_EXPORT_MODE: user_input[CONF_EXPORT_MODE],
-                }
-            )
+            changes: dict[str, Any] = {CONF_TOLERANCE: float(user_input[CONF_TOLERANCE])}
+            if CONF_EXPORT_MODE in user_input:
+                changes[CONF_EXPORT_MODE] = user_input[CONF_EXPORT_MODE]
+            return self._save(**changes)
         options = self.config_entry.options
-        schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_TOLERANCE, default=options.get(CONF_TOLERANCE, DEFAULT_TOLERANCE_PCT)
-                ): _TOLERANCE,
-                vol.Required(CONF_EXPORT_MODE, default=self._export_mode()): _EXPORT_MODE,
-            }
-        )
-        return self.async_show_form(step_id="settings", data_schema=schema)
+        tolerance = DEFAULT_GAS_TOLERANCE_PCT if self._gas else DEFAULT_TOLERANCE_PCT
+        fields: dict[Any, Any] = {
+            vol.Required(CONF_TOLERANCE, default=options.get(CONF_TOLERANCE, tolerance)): (
+                _TOLERANCE
+            )
+        }
+        if not self._gas:
+            fields[vol.Required(CONF_EXPORT_MODE, default=self._export_mode())] = _EXPORT_MODE
+        return self.async_show_form(step_id="settings", data_schema=vol.Schema(fields))

@@ -12,11 +12,11 @@ cycle dates, tariff, tolerance, sensors and a card each.
 
 - `core/units.py` (pure):
   - `Meter` (`StrEnum`): `electric`, `gas`.
-  - `scale(from_unit, to_unit, heat_content)` returns the factor that converts one unit
+  - `scale(from_unit, to_unit)` returns the factor that converts one unit
     to the other (§3). It uses HA's unit converters, passed in so the core stays
     HA-free, and returns `None` when no conversion is possible.
-- `const.py`: `CONF_METER`, `CONF_UNIT`, `CONF_HEAT_CONTENT`, `CONF_UTILITY_UNIT`;
-  `DEFAULT_GAS_TOLERANCE_PCT = 5.0`; `DEFAULT_HEAT_CONTENT = 1.037` (therms per CCF).
+- `const.py`: `CONF_METER`, `CONF_UNIT`, `CONF_UTILITY_UNIT`;
+  `DEFAULT_GAS_TOLERANCE_PCT = 5.0`.
 - `stats.py`:
   - `StatIds` gains a per-statistic `scale` mapping.
   - `fetch_changes` fetches without unit conversion (`units=None`) and multiplies each
@@ -75,8 +75,8 @@ For **gas**:
 
 - **user step**: one statistic, HA's gas consumption. There is no export statistic.
   - It is pre-filled from the Energy dashboard's first `gas` source (`stat_energy_from`).
-  - Statistics with a volume unit (`m³`, `ft³`, `CCF`, `MCF`, `L`, `gal`) or an energy
-    unit (`kWh`, `MJ`, `GJ`, `thm`, …) are accepted. Anything else is rejected with
+  - Statistics with a volume unit (`m³`, `ft³`, `CCF`, `MCF`, `L`, `gal`) or in therms
+    (`thm`) are accepted. Gas is not measured in kWh, MJ or GJ, so those are rejected. Anything else is rejected with
     `not_a_gas_statistic`.
 - **utility step**: lists Opower **gas** accounts. These are statistics whose prefix
   holds `_gas_`, and their date sensors end in `_gas_start_date` and `_gas_end_date`. The
@@ -84,7 +84,7 @@ For **gas**:
   account number are not confused.
 - **units step** (new, gas only, always shown):
   - **Billing unit**: "What unit does your gas bill charge by?" The choices are therms
-    (`thm`, the default), CCF, m³ and kWh. The answer becomes the entry's unit
+    (`thm`, the default), CCF and m³. The answer becomes the entry's unit
     (`CONF_UNIT`). All quantities, rates, tiers and sensors use it.
   - **Utility data unit**: the unit of the utility statistic, when there is one. The
     Opower integration labels every gas statistic `CCF`, even for utilities whose data
@@ -92,10 +92,6 @@ For **gas**:
     forecast (`unit_of_measure`), through the same guarded access as `opower_bills.py`
     §4. It pre-fills from that, and the user can correct it. For non-Opower statistics,
     it is taken from the statistic's metadata and not shown.
-  - **Heat content**, therms per CCF. It is shown when any statistic and the billing
-    unit are in different classes, one a volume and the other an energy. The typical
-    case: Opower data in CCF, billed in therms. It defaults to 1.037. The help text says
-    to copy the "therm factor" or "BTU factor" from a recent bill.
 - **cycle** and **tariff** steps as today, except:
   - rate fields are labelled per entry unit (e.g. `$/thm`);
   - there is no export mode;
@@ -113,8 +109,6 @@ Entries without `CONF_METER` are electric with unit `kWh`. No migration step and
 ### 2.3 Options
 
 - Settings: tolerance; no export mode for gas.
-- Gas entries also get **Heat content** in settings when it applies. Utilities change it
-  monthly, and a new value reprices non-final cycles only.
 - Reconfigure keeps the meter type. Changing it means a new entry.
 
 ## 3. Units
@@ -123,12 +117,11 @@ Entries without `CONF_METER` are electric with unit `kWh`. No migration step and
 
 Every statistic is converted to the billing unit by a fixed factor:
 
-- Same class (volume to volume, energy to energy): HA's `VolumeConverter` or
-  `EnergyConverter` factor. Examples: `m³` to `CCF` is 0.353147; `kWh` to `thm` is
-  0.034121.
-- Volume to energy: through the heat content. `CCF × heat_content = thm`, combined with
-  the converters for other units. For example, `m³` to `kWh` is
-  `m³ → CCF → thm → kWh`.
+- Volume to volume: HA's `VolumeConverter` factor. For example, `m³` to `CCF` is
+  0.353147.
+- Volume to therms: 1 CCF = 1 thm, as most US utilities bill. There is no heat-content
+  setting. For example, `m³` to `thm` is `m³ → CCF → thm`. (HA files therms under its
+  energy converter, which is the only reason that converter is involved.)
 - Opower gas statistics use the utility data unit from §2.1, not the statistic's
   metadata.
 - For example, with HA's meter in `ft³`, Opower data in CCF, and billing in therms, the HA
@@ -159,16 +152,15 @@ billing unit too.
   or more late. Gas entries always use `day` slots (`daily_only=True`), for the open
   cycle too. Coverage is then per day, and an hourly query never makes it look complete.
 - **Default tolerance 5%.** Gas meters register uncorrected volume. The utility corrects
-  for temperature, pressure and altitude, and the bill is often in therms derived from a
-  monthly heat content. 2% would flag normal months; the user can tighten it.
+  for temperature, pressure and altitude, and a bill in therms may apply a therm factor
+  that this integration treats as 1. 2% would flag normal months; the user can tighten it.
 - **Calibration ratio** works as for electric. It is informative only.
 - Reconciliation, status bands, projection and pricing are otherwise unchanged.
 
 ## 5. Sensors
 
 - `cycle_import`:
-  - device class `GAS` when the unit is a volume unit, or `ENERGY` when it is `kWh`,
-    `MJ`, `GJ`, …;
+  - device class `GAS` when the unit is a volume unit;
   - unit is the entry's unit;
   - state class `total_increasing` as today.
   - **Exception:** HA's `GAS` device class does not accept `thm`. A therm entry uses
@@ -212,9 +204,9 @@ Refactor (§1.1):
 - **`tests_ha`.** The store migration renames keys in a stored state from an earlier beta.
 
 `tests/test_units.py`:
-- Same-class scales (`m³` to `CCF`, `kWh` to `thm`).
-- Cross-class scales with a heat content.
-- `None` for an unsupported pair or a missing heat content.
+- Volume scales (`m³` to `CCF`).
+- Volume to therms at 1 CCF = 1 thm.
+- `None` for an unsupported pair.
 
 `tests/test_discovery.py` (or the existing discovery tests):
 - Gas statistics and `_gas_` date sensors are found.
@@ -223,8 +215,7 @@ Refactor (§1.1):
 
 `tests_ha/test_gas.py` (generated statistics only):
 - **Setup, mixed units:** a gas flow with an HA statistic in `ft³`, an Opower-style
-  utility statistic in CCF, and billing in therms. The flow asks for heat content and
-  stores unit `thm`. Both totals come out in therms.
+  utility statistic in CCF, and billing in therms. The flow stores unit `thm`. Both totals come out in therms.
 - **Setup, therm data:** an Opower statistic labelled `CCF` whose account forecast says
   `THERM`. The utility data unit pre-fills to therms, and no scale is applied to it.
 - **Changing the unit:** changing the billing unit by reconfigure converts final cycles
@@ -239,7 +230,6 @@ Refactor (§1.1):
 `tests_ha/test_config_flow.py`:
 - The meter choice.
 - A gas statistic is rejected on an electric entry, and the reverse.
-- The heat-content field only appears when the units are mixed.
 
 Card changes are checked by hand on the dev instance with a generated gas statistic. No
 real account IDs or readings go in fixtures.

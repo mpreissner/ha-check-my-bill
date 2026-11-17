@@ -1,6 +1,6 @@
-"""Find the Energy dashboard's grid statistics and the Opower electric accounts.
+"""Find the Energy dashboard's grid and gas statistics and the Opower accounts.
 
-See docs/specs/config-flow.md §1.
+See docs/specs/config-flow.md §1 and docs/specs/gas.md §2.1.
 """
 
 from __future__ import annotations
@@ -13,11 +13,13 @@ from homeassistant.components.recorder.statistics import async_list_statistic_id
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
+from .core.units import Meter
+
 OPOWER = "opower"
 CONSUMPTION = "_energy_consumption"
 RETURN = "_energy_return"
-START_SUFFIX = "_elec_start_date"
-END_SUFFIX = "_elec_end_date"
+METER_TAGS = {Meter.ELECTRIC: "elec", Meter.GAS: "gas"}
+"""How Opower names each meter type in statistic IDs and sensor unique IDs."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,9 +32,10 @@ class GridPair:
 
 @dataclass(frozen=True, slots=True)
 class OpowerAccount:
-    """An Opower electric account and the date sensors that belong to it."""
+    """An Opower account and the date sensors that belong to it."""
 
     key: str
+    meter: Meter
     consumption_stat: str
     return_stat: str | None
     start_entity: str | None
@@ -46,20 +49,32 @@ def _normalize(value: str) -> str:
 
 
 def key_from_statistic(statistic_id: str) -> str | None:
-    """``opower:bge_elec_123_energy_consumption`` -> ``bge_123``; None if not electric."""
+    """``opower:bge_elec_123_energy_consumption`` -> ``bge_123_elec``; None if not Opower.
+
+    The key ends in the meter tag, so an electric and a gas account with the same number
+    differ.
+    """
     if not statistic_id.startswith(f"{OPOWER}:") or not statistic_id.endswith(CONSUMPTION):
         return None
     prefix = statistic_id.removeprefix(f"{OPOWER}:").removesuffix(CONSUMPTION)
-    if "_elec_" not in prefix:
-        return None
-    return prefix.replace("_elec_", "_", 1)
+    for tag in METER_TAGS.values():
+        if f"_{tag}_" in prefix:
+            return f"{prefix.replace(f'_{tag}_', '_', 1)}_{tag}"
+    return None
+
+
+def meter_of_key(key: str) -> Meter | None:
+    """The meter a discovery key belongs to."""
+    return next((m for m, tag in METER_TAGS.items() if key.endswith(f"_{tag}")), None)
 
 
 def key_from_unique_id(unique_id: str) -> tuple[str, str] | None:
-    """``bge_123_elec_start_date`` -> (``bge_123``, ``start``); None for other sensors."""
-    for suffix, which in ((START_SUFFIX, "start"), (END_SUFFIX, "end")):
-        if unique_id.endswith(suffix):
-            return _normalize(unique_id.removesuffix(suffix)), which
+    """``bge_123_elec_start_date`` -> (``bge_123_elec``, ``start``); None for other sensors."""
+    for tag in METER_TAGS.values():
+        for which in ("start", "end"):
+            suffix = f"_{tag}_{which}_date"
+            if unique_id.endswith(suffix):
+                return f"{_normalize(unique_id.removesuffix(suffix))}_{tag}", which
     return None
 
 
@@ -86,14 +101,31 @@ def grid_pairs(prefs: dict[str, Any] | None) -> list[GridPair]:
     return pairs
 
 
+def gas_sources(prefs: dict[str, Any] | None) -> list[str]:
+    """The gas sources' consumption statistics."""
+    return [
+        source["stat_energy_from"]
+        for source in (prefs or {}).get("energy_sources", [])
+        if source.get("type") == "gas" and source.get("stat_energy_from")
+    ]
+
+
+async def gas_statistics(hass: HomeAssistant) -> list[str]:
+    """The Energy dashboard's gas consumption statistics."""
+    manager = await async_get_manager(hass)
+    return gas_sources(manager.data)  # type: ignore[arg-type]
+
+
 async def grid_statistics(hass: HomeAssistant) -> list[GridPair]:
     """The Energy dashboard's grid import/export statistic pairs."""
     manager = await async_get_manager(hass)
     return grid_pairs(manager.data)  # type: ignore[arg-type]
 
 
-async def opower_accounts(hass: HomeAssistant) -> list[OpowerAccount]:
-    """Opower electric accounts with a consumption statistic."""
+async def opower_accounts(
+    hass: HomeAssistant, meter: Meter = Meter.ELECTRIC
+) -> list[OpowerAccount]:
+    """Opower accounts of one meter type with a consumption statistic."""
     listed = await async_list_statistic_ids(hass, statistic_type="sum")
     stat_ids = {s["statistic_id"] for s in listed}
 
@@ -107,7 +139,7 @@ async def opower_accounts(hass: HomeAssistant) -> list[OpowerAccount]:
     titles = {e.entry_id: e.title for e in hass.config_entries.async_entries(OPOWER)}
     accounts = []
     for statistic_id in sorted(stat_ids):
-        if (key := key_from_statistic(statistic_id)) is None:
+        if (key := key_from_statistic(statistic_id)) is None or meter_of_key(key) is not meter:
             continue
         dates = entities.get(key, {})
         entry_id = next((e.config_entry_id for e in dates.values()), None)
@@ -117,6 +149,7 @@ async def opower_accounts(hass: HomeAssistant) -> list[OpowerAccount]:
         accounts.append(
             OpowerAccount(
                 key=key,
+                meter=meter,
                 consumption_stat=statistic_id,
                 return_stat=return_stat if return_stat in stat_ids else None,
                 start_entity=dates["start"].entity_id if "start" in dates else None,

@@ -13,6 +13,8 @@ const REFRESH_MS = 5 * 60 * 1000;
 const ENERGY_RETRIES = 10;
 const MAX_RANGE_DAYS = 400;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const BOLT = "M11 15H6l7-14v8h5l-7 14v-8z";
+const FLAME = "M12 2c.6 3.6 5 6 5 11a5 5 0 0 1-10 0c0-2.6 1.4-4.3 2.4-5.6.4 1.8 1.2 2.9 2.4 3.6.5-2.7.2-5.5-.8-9z";
 
 const STATUS = {
   ok: ["OK", "var(--success-color, #43a047)"],
@@ -339,6 +341,15 @@ class CheckMyBillCard extends HTMLElement {
     return `<span class="pill" style="--pill:${color}"><span class="dot"></span>${esc(label)}</span>`;
   }
 
+  /** The billing unit, e.g. kWh or thm. */
+  get _unit() {
+    return esc(this._data?.unit ?? "kWh");
+  }
+
+  get _gas() {
+    return this._data?.meter === "gas";
+  }
+
   /* ---------- rendering ---------- */
 
   /** Two horizontal bars comparing Home Assistant's meter with the utility's. */
@@ -353,7 +364,7 @@ class CheckMyBillCard extends HTMLElement {
         : "";
     const bar = (name, cls, value, extra) => `
       <div class="meter">
-        <div class="meter-label"><span>${name}</span><span class="num">${this._qty(value)} kWh${extra}</span></div>
+        <div class="meter-label"><span>${name}</span><span class="num">${this._qty(value)} ${this._unit}${extra}</span></div>
         <div class="track"><div class="fill ${cls}" style="width:${((value ?? 0) / max) * 100}%"></div></div>
       </div>`;
     return `<div class="meters">${bar("Home Assistant", "ha", record.metered, "")}${bar(
@@ -406,7 +417,7 @@ class CheckMyBillCard extends HTMLElement {
 
     const lag =
       open && coverage < 1
-        ? '<div class="note">Utility data lags 1–2 days behind the meter.</div>'
+        ? `<div class="note">Utility data lags ${this._gas ? "1–3" : "1–2"} days behind the meter.</div>`
         : "";
     return `
       <section class="summary">
@@ -435,7 +446,7 @@ class CheckMyBillCard extends HTMLElement {
     const at = (v) => `${((v - lo) / (hi - lo)) * 100}%`;
     const [, color] = this._status(record.status);
     const tol = this._data?.tolerance_pct;
-    let caption = `Expected utility reading ${this._qty(low)}–${this._qty(high)} kWh`;
+    let caption = `Expected utility reading ${this._qty(low)}–${this._qty(high)} ${this._unit}`;
     if (tol !== undefined) caption += ` (±${esc(tol)}%)`;
     if (record.deviation_pct) {
       const sign = record.deviation_pct > 0 ? "+" : "";
@@ -445,7 +456,7 @@ class CheckMyBillCard extends HTMLElement {
       value == null
         ? ""
         : `<div class="band-marker" style="left:${at(value)};--pill:${color}"
-              title="Utility ${this._qty(value)} kWh"></div>`;
+              title="Utility ${this._qty(value)} ${this._unit}"></div>`;
     return `
       <div class="block">
         <div class="block-title">Reconciliation</div>
@@ -477,17 +488,17 @@ class CheckMyBillCard extends HTMLElement {
           </table>
           <div class="muted">Priced on ${
             record.cost_basis === "utility" ? "the utility's" : "Home Assistant's"
-          } ${this._qty(cost.billed_quantity, 1)} kWh.</div>
+          } ${this._qty(cost.billed_quantity, 1)} ${this._unit}.</div>
         </div>`);
     }
     const side = [this._meters(record)];
     if (record.band) side.push(this._band(record));
     if (this._data?.export_mode && this._data.export_mode !== "none") {
       side.push(
-        `<div class="muted">Export: HA ${this._qty(record.export, 1)} kWh, utility ${this._qty(
+        `<div class="muted">Export: HA ${this._qty(record.export, 1)} ${this._unit}, utility ${this._qty(
           record.utility_export,
           1,
-        )} kWh.</div>`,
+        )} ${this._unit}.</div>`,
       );
     }
     if (record.status === "no_data") {
@@ -520,7 +531,7 @@ class CheckMyBillCard extends HTMLElement {
                 <div class="row-dates">${this._dates(c)}</div>
                 <div class="muted small">${esc(label)} · HA ${this._qty(c.metered)} · utility ${this._qty(
                   c.utility,
-                )} kWh</div>
+                )} ${this._unit}</div>
               </div>
               ${right}
               <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.41 8.58 12 13.17l4.59-4.59L18 10l-6 6-6-6z"/></svg>
@@ -560,10 +571,11 @@ class CheckMyBillCard extends HTMLElement {
 
   _render() {
     if (!this._config) return;
-    const title = this._config.title ?? "Electric bill";
+    const title = this._config.title ?? (this._gas ? "Gas bill" : "Electric bill");
+    const icon = this._gas ? FLAME : BOLT;
     const header = title
       ? `<div class="card-header">
-          <span class="badge" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M11 15H6l7-14v8h5l-7 14v-8z"/></svg></span>
+          <span class="badge" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="${icon}"/></svg></span>
           <h1>${esc(title)}</h1>
         </div>`
       : "";

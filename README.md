@@ -1,6 +1,6 @@
 # Check My Bill for Home Assistant
 
-Checks your electricity bill against the energy your own meters recorded.
+Checks your electricity or gas bill against what your own meters recorded.
 
 Check My Bill reads the grid statistics already set up on the Energy dashboard, and, if you
 use the Opower integration, what your utility reports. For the current and past billing
@@ -59,6 +59,20 @@ Under **Configure** on the integration you can change:
 
 Choose **Reconfigure** to pick different statistics. That rebuilds the cycle history.
 
+### Gas
+
+Add a second entry and choose **Gas** on the first page.
+
+- **Unit.** Setup asks which unit your bill charges by: therms, CCF or m³. Quantities,
+  rates and sensors all use that unit.
+- **CCF and therms.** A CCF counts as one therm, as most US utilities bill. A meter in ft³
+  or m³ works with a bill in therms through that rate.
+- **Opower's units.** Opower labels all gas data CCF, even when the utility reports therms.
+  Setup reads the real unit from your account and lets you correct it.
+- **Comparison by day.** Gas is compared by whole day, because utilities report gas usage
+  by day. The current cycle runs to the end of yesterday.
+- **Defaults.** Gas has no export, and its default tolerance is 5%.
+
 ## What you get
 
 ### Card
@@ -105,7 +119,8 @@ It shows:
 You get a repair issue when:
 
 - the utility starts recording export while export billing is set to "not billed";
-- a configured statistic disappears, for example after Opower is re-authenticated.
+- a configured statistic disappears, for example after Opower is re-authenticated;
+- a configured statistic changes its unit.
 
 ## Known limitations
 

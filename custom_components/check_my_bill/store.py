@@ -27,6 +27,10 @@ class StoredState:
     """Closed cycles, newest first."""
     sources: dict[str, str | None] | None = None
     """The statistic IDs the records were computed from; None before this was stored."""
+    unit: str | None = None
+    """The billing unit the records are in; None before this was stored (kWh)."""
+    stat_units: dict[str, str | None] | None = None
+    """Each statistic's metadata unit when its scale was last computed."""
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-safe form."""
@@ -40,6 +44,8 @@ class StoredState:
             },
             "cycles": [record.to_dict() for record in self.cycles],
             "sources": self.sources,
+            "unit": self.unit,
+            "stat_units": self.stat_units,
         }
 
     @classmethod
@@ -48,6 +54,10 @@ class StoredState:
         state = cls()
         if isinstance(sources := data.get("sources"), dict):
             state.sources = sources
+        if isinstance(unit := data.get("unit"), str):
+            state.unit = unit
+        if isinstance(stat_units := data.get("stat_units"), dict):
+            state.stat_units = stat_units
         if current := data.get("current"):
             try:
                 state.current = Cycle(
