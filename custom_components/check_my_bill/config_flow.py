@@ -28,9 +28,9 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
-    StatisticSelector,
 )
 from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import EnergyConverter
 
 from .const import (
     CONF_CYCLE_DAY,
@@ -69,7 +69,6 @@ CONF_VERSIONS = "versions"
 RATE_FIELDS = ("supply", "delivery")
 CHARGE_FIELDS = ("fixed_monthly", "fixed_daily", "tax_pct", "export_rate")
 
-_STAT = StatisticSelector()
 _DATE = DateSelector()
 _SENSOR = EntitySelector(EntitySelectorConfig(domain="sensor"))
 _EXPORT_MODE = SelectSelector(
@@ -217,16 +216,53 @@ def _is_gas_unit(unit: str | None) -> bool:
     return unit is not None and (unit in VOLUME.units or unit == THERM)
 
 
-async def _gas_error(hass: Any, statistic_id: str) -> str | None:
-    units = await _stat_units(hass, [statistic_id])
-    return None if _is_gas_unit(units.get(statistic_id)) else "not_a_gas_statistic"
+def _fits(meter: Meter, unit: str | None) -> bool:
+    """Whether a statistic in ``unit`` can measure ``meter``."""
+    if meter is Meter.GAS:
+        return _is_gas_unit(unit)
+    return unit in EnergyConverter.VALID_UNITS and unit != THERM
 
 
-async def _electric_error(hass: Any, statistic_ids: list[str | None]) -> str | None:
-    units = await _stat_units(hass, statistic_ids)
-    if any(_is_gas_unit(u) for u in units.values()):
-        return "not_an_electric_statistic"
-    return None
+def _stat_label(hass: Any, statistic_id: str, name: str | None) -> str:
+    state = hass.states.get(statistic_id)
+    name = state.name if state is not None else name
+    return f"{name} ({statistic_id})" if name else statistic_id
+
+
+async def _stat_options(
+    hass: Any, meter: Meter, *, utility: bool = True, keep: tuple[str | None, ...] = ()
+) -> list[SelectOptionDict]:
+    """The cumulative statistics whose unit fits ``meter``, plus ``keep``.
+
+    ``utility=False`` leaves out Opower's statistics: they are the utility's data, not the
+    meter's.
+    """
+    options: dict[str, str] = {}
+    for meta in await async_list_statistic_ids(hass, statistic_type="sum"):
+        statistic_id = meta["statistic_id"]
+        if not _fits(meter, meta.get("statistics_unit_of_measurement")):
+            continue
+        if not utility and meta.get("source") == "opower":
+            continue
+        options[statistic_id] = _stat_label(hass, statistic_id, meta.get("name"))
+    for statistic_id in keep:
+        if statistic_id and statistic_id not in options:
+            options[statistic_id] = _stat_label(hass, statistic_id, None)
+    return [
+        SelectOptionDict(value=value, label=label)
+        for value, label in sorted(options.items(), key=lambda item: item[1].casefold())
+    ]
+
+
+def _stat_select(options: list[SelectOptionDict]) -> SelectSelector:
+    return SelectSelector(
+        SelectSelectorConfig(options=options, mode=SelectSelectorMode.DROPDOWN, sort=False)
+    )
+
+
+def _offered(value: str | None, options: list[SelectOptionDict]) -> str | None:
+    """``value`` if the dropdown offers it, so a pre-fill never names a hidden statistic."""
+    return value if any(o["value"] == value for o in options) else None
 
 
 def _meter(data: Any) -> Meter:
@@ -255,52 +291,59 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
         return self._data.get(CONF_METER) == Meter.GAS
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Meter type, then the grid statistics pre-filled from the Energy dashboard."""
-        errors: dict[str, str] = {}
+        """Electric or gas; its statistics are chosen on the next page."""
         if user_input is not None:
-            if Meter(user_input.get(CONF_METER, Meter.ELECTRIC)) is Meter.GAS:
+            if Meter(user_input[CONF_METER]) is Meter.GAS:
                 self._data = {CONF_METER: Meter.GAS.value}
                 return await self.async_step_gas()
-            imports = user_input.get(CONF_IMPORT_STAT)
-            export = user_input.get(CONF_EXPORT_STAT)
-            if not imports:
-                errors[CONF_IMPORT_STAT] = "import_required"
-            elif error := await _electric_error(self.hass, [imports, export]):
-                errors["base"] = error
-            else:
-                # Electric entries carry no meter or unit: absent means electric, kWh.
-                self._data = {CONF_IMPORT_STAT: imports}
-                if export:
-                    self._data[CONF_EXPORT_STAT] = export
-                return await self._async_step_accounts()
+            # Electric entries carry no meter or unit: absent means electric, kWh.
+            self._data = {}
+            return await self.async_step_electric()
 
+        schema = vol.Schema({vol.Required(CONF_METER, default=Meter.ELECTRIC.value): _METER})
+        return self.async_show_form(step_id="user", data_schema=schema)
+
+    async def async_step_electric(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """The grid statistics, pre-filled from the Energy dashboard."""
+        if user_input is not None:
+            self._data[CONF_IMPORT_STAT] = user_input[CONF_IMPORT_STAT]
+            if export := user_input.get(CONF_EXPORT_STAT):
+                self._data[CONF_EXPORT_STAT] = export
+            return await self._async_step_accounts()
+
+        options = await _stat_options(self.hass, Meter.ELECTRIC, utility=False)
+        if not options:
+            return self.async_abort(reason="no_electric_statistics")
         pairs = await grid_statistics(self.hass)
         first = pairs[0] if pairs else None
+        stat = _stat_select(options)
         schema = vol.Schema(
             {
-                vol.Required(CONF_METER, default=Meter.ELECTRIC.value): _METER,
-                _suggested(CONF_IMPORT_STAT, first and first.import_stat): _STAT,
-                _suggested(CONF_EXPORT_STAT, first and first.export_stat): _STAT,
+                _suggested(
+                    CONF_IMPORT_STAT, _offered(first and first.import_stat, options), required=True
+                ): stat,
+                _suggested(CONF_EXPORT_STAT, _offered(first and first.export_stat, options)): stat,
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        return self.async_show_form(step_id="electric", data_schema=schema)
 
     async def async_step_gas(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """The gas consumption statistic, pre-filled from the Energy dashboard."""
-        errors: dict[str, str] = {}
         if user_input is not None:
-            imports = user_input[CONF_IMPORT_STAT]
-            if error := await _gas_error(self.hass, imports):
-                errors["base"] = error
-            else:
-                self._data[CONF_IMPORT_STAT] = imports
-                return await self._async_step_accounts()
+            self._data[CONF_IMPORT_STAT] = user_input[CONF_IMPORT_STAT]
+            return await self._async_step_accounts()
 
+        options = await _stat_options(self.hass, Meter.GAS, utility=False)
+        if not options:
+            return self.async_abort(reason="no_gas_statistics")
         sources = await gas_statistics(self.hass)
+        first = next((s for s in sources if _offered(s, options)), None)
         schema = vol.Schema(
-            {_suggested(CONF_IMPORT_STAT, sources[0] if sources else None, required=True): _STAT}
+            {_suggested(CONF_IMPORT_STAT, first, required=True): _stat_select(options)}
         )
-        return self.async_show_form(step_id="gas", data_schema=schema, errors=errors)
+        return self.async_show_form(step_id="gas", data_schema=schema)
 
     async def _async_step_accounts(self) -> ConfigFlowResult:
         self._accounts = await opower_accounts(self.hass, _meter(self._data))
@@ -477,7 +520,20 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
         current = dict(entry.data)
-        gas = _meter(entry.data) is Meter.GAS
+        meter = _meter(entry.data)
+        gas = meter is Meter.GAS
+        # The entry's own statistics stay selectable even if the recorder lost them.
+        meters = await _stat_options(
+            self.hass,
+            meter,
+            utility=False,
+            keep=(current.get(CONF_IMPORT_STAT), current.get(CONF_EXPORT_STAT)),
+        )
+        utilities = await _stat_options(
+            self.hass,
+            meter,
+            keep=(current.get(CONF_UTILITY_IMPORT_STAT), current.get(CONF_UTILITY_EXPORT_STAT)),
+        )
         if user_input is not None:
             start = user_input.get(CONF_CYCLE_START_ENTITY)
             end = user_input.get(CONF_CYCLE_END_ENTITY)
@@ -485,15 +541,6 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cycle_pair"
             elif not start and user_input.get(CONF_CYCLE_DAY) is None:
                 errors["base"] = "cycle_one"
-            elif error := (
-                await _gas_error(self.hass, user_input[CONF_IMPORT_STAT])
-                if gas
-                else await _electric_error(
-                    self.hass,
-                    [user_input[CONF_IMPORT_STAT], user_input.get(CONF_EXPORT_STAT)],
-                )
-            ):
-                errors["base"] = error
             else:
                 # The meter type and setup-time units are kept; gas.md §2.3.
                 kept = {
@@ -516,15 +563,18 @@ class CheckMyBillConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_update_reload_and_abort(entry, unique_id=unique_id, data=data)
             current = user_input
 
+        meter_stat, utility_stat = _stat_select(meters), _stat_select(utilities)
         fields: dict[Any, Any] = {
-            _suggested(CONF_IMPORT_STAT, current.get(CONF_IMPORT_STAT), required=True): _STAT,
+            _suggested(CONF_IMPORT_STAT, current.get(CONF_IMPORT_STAT), required=True): meter_stat,
         }
         if not gas:
-            fields[_suggested(CONF_EXPORT_STAT, current.get(CONF_EXPORT_STAT))] = _STAT
-        fields[_suggested(CONF_UTILITY_IMPORT_STAT, current.get(CONF_UTILITY_IMPORT_STAT))] = _STAT
+            fields[_suggested(CONF_EXPORT_STAT, current.get(CONF_EXPORT_STAT))] = meter_stat
+        fields[_suggested(CONF_UTILITY_IMPORT_STAT, current.get(CONF_UTILITY_IMPORT_STAT))] = (
+            utility_stat
+        )
         if not gas:
             fields[_suggested(CONF_UTILITY_EXPORT_STAT, current.get(CONF_UTILITY_EXPORT_STAT))] = (
-                _STAT
+                utility_stat
             )
         fields[_suggested(CONF_CYCLE_START_ENTITY, current.get(CONF_CYCLE_START_ENTITY))] = _SENSOR
         fields[_suggested(CONF_CYCLE_END_ENTITY, current.get(CONF_CYCLE_END_ENTITY))] = _SENSOR

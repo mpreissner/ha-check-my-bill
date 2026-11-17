@@ -3,9 +3,15 @@
     "step": {
       "user": {
         "title": "Meter",
-        "description": "Choose what to check. For electricity, pick the statistics that measure energy from and to the grid; they default to the Energy dashboard's grid source. For gas, the statistic is chosen on the next page.",
+        "description": "Choose what to check. You pick its statistics on the next page.",
         "data": {
-          "meter": "Meter",
+          "meter": "Meter"
+        }
+      },
+      "electric": {
+        "title": "Electricity statistics",
+        "description": "The statistics that measure energy from and to the grid. Only energy statistics are listed; they default to the Energy dashboard's grid source.",
+        "data": {
           "import_stat": "Grid import",
           "export_stat": "Grid export"
         },
@@ -16,7 +22,7 @@
       },
       "gas": {
         "title": "Gas statistic",
-        "description": "The statistic that measures your gas consumption. It defaults to the Energy dashboard's first gas source.",
+        "description": "The statistic that measures your gas consumption. Only statistics in a volume or therms are listed; it defaults to the Energy dashboard's first gas source.",
         "data": {
           "import_stat": "Gas consumption"
         },
@@ -98,14 +104,13 @@
       "cycle_one": "Enter either the meter-read day or the last bill end date.",
       "cycle_pair": "Set both billing-date sensors, or neither.",
       "rates_both": "Enter both the supply and the delivery rate.",
-      "invalid_tariff": "The rates could not be read. Check the values and their format.",
-      "import_required": "Choose the grid import statistic.",
-      "not_a_gas_statistic": "This statistic is not in a gas unit: a volume such as ft³, m³ or CCF, or therms.",
-      "not_an_electric_statistic": "This statistic is in a gas unit. To check gas, choose the gas meter instead."
+      "invalid_tariff": "The rates could not be read. Check the values and their format."
     },
     "abort": {
       "already_configured": "This meter is already being checked.",
-      "reconfigure_successful": "The data sources were updated."
+      "reconfigure_successful": "The data sources were updated.",
+      "no_electric_statistics": "No energy statistics were found. Add an energy meter to Home Assistant first, such as the one the Energy dashboard uses for the grid.",
+      "no_gas_statistics": "No gas statistics were found. Add a gas meter to Home Assistant first, in a volume (ft³, m³, CCF) or therms."
     }
   },
   "options": {

@@ -38,11 +38,16 @@ found even when disabled.
 
 ## 2. Config flow
 
-1. **`user`: grid.**
-   - `import_stat` is a required statistic picker; `export_stat` is optional.
-   - Both default to the first grid source in the Energy prefs.
-   - With no Energy grid source the pickers start empty. The step does not abort, because
-     the user may track import with a statistic the Energy dashboard doesn't use.
+1. **`user`: meter.** Only the meter choice, electric (default) or gas. Gas goes to the
+   `gas` step (gas.md §2.1); electric to `electric`.
+   - **`electric`: grid.** `import_stat` is required; `export_stat` is optional.
+   - Both are dropdowns of the recorder's cumulative statistics in an energy unit other
+     than therms, leaving out Opower's (they are the utility's data). HA's statistic
+     picker cannot filter by unit, so the options come from the statistic metadata.
+   - Both default to the first grid source in the Energy prefs, when the dropdown lists it.
+     With no Energy grid source the dropdowns start empty, because the user may track
+     import with a statistic the Energy dashboard doesn't use.
+   - With no fitting statistic at all, the flow aborts with `no_electric_statistics`.
 2. **`utility`**, shown only when at least one Opower account is found.
    - `account` is a select of the accounts plus **"Don't use utility data"**, defaulting
      to the first account.
